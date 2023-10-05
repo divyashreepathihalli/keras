@@ -34,10 +34,11 @@ import zipfile
 
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
+import keras
 
 import matplotlib.pyplot as plt
 import tensorflow_datasets as tfds
+from keras import ops
 
 
 """
@@ -80,7 +81,7 @@ def swap_xy(boxes):
     Returns:
       swapped boxes with shape same as that of boxes.
     """
-    return tf.stack([boxes[:, 1], boxes[:, 0], boxes[:, 3], boxes[:, 2]], axis=-1)
+    return ops.stack([boxes[:, 1], boxes[:, 0], boxes[:, 3], boxes[:, 2]], axis=-1)
 
 
 def convert_to_xywh(boxes):
@@ -94,7 +95,7 @@ def convert_to_xywh(boxes):
     Returns:
       converted boxes with shape same as that of boxes.
     """
-    return tf.concat(
+    return ops.concat(
         [(boxes[..., :2] + boxes[..., 2:]) / 2.0, boxes[..., 2:] - boxes[..., :2]],
         axis=-1,
     )
@@ -111,7 +112,7 @@ def convert_to_corners(boxes):
     Returns:
       converted boxes with shape same as that of boxes.
     """
-    return tf.concat(
+    return ops.concat(
         [boxes[..., :2] - boxes[..., 2:] / 2.0, boxes[..., :2] + boxes[..., 2:] / 2.0],
         axis=-1,
     )
@@ -143,16 +144,16 @@ def compute_iou(boxes1, boxes2):
     """
     boxes1_corners = convert_to_corners(boxes1)
     boxes2_corners = convert_to_corners(boxes2)
-    lu = tf.maximum(boxes1_corners[:, None, :2], boxes2_corners[:, :2])
-    rd = tf.minimum(boxes1_corners[:, None, 2:], boxes2_corners[:, 2:])
-    intersection = tf.maximum(0.0, rd - lu)
+    lu = ops.maximum(boxes1_corners[:, None, :2], boxes2_corners[:, :2])
+    rd = ops.minimum(boxes1_corners[:, None, 2:], boxes2_corners[:, 2:])
+    intersection = ops.maximum(0.0, rd - lu)
     intersection_area = intersection[:, :, 0] * intersection[:, :, 1]
     boxes1_area = boxes1[:, 2] * boxes1[:, 3]
     boxes2_area = boxes2[:, 2] * boxes2[:, 3]
-    union_area = tf.maximum(
+    union_area = ops.maximum(
         boxes1_area[:, None] + boxes2_area - intersection_area, 1e-8
     )
-    return tf.clip_by_value(intersection_area / union_area, 0.0, 1.0)
+    return ops.clip_by_value(intersection_area / union_area, 0.0, 1.0)
 
 
 def visualize_detections(
@@ -232,14 +233,14 @@ class AnchorBox:
         for area in self._areas:
             anchor_dims = []
             for ratio in self.aspect_ratios:
-                anchor_height = tf.math.sqrt(area / ratio)
+                anchor_height = ops.math.sqrt(area / ratio)
                 anchor_width = area / anchor_height
-                dims = tf.reshape(
-                    tf.stack([anchor_width, anchor_height], axis=-1), [1, 1, 2]
+                dims = ops.reshape(
+                    ops.stack([anchor_width, anchor_height], axis=-1), [1, 1, 2]
                 )
                 for scale in self.scales:
                     anchor_dims.append(scale * dims)
-            anchor_dims_all.append(tf.stack(anchor_dims, axis=-2))
+            anchor_dims_all.append(ops.stack(anchor_dims, axis=-2))
         return anchor_dims_all
 
     def _get_anchors(self, feature_height, feature_width, level):
@@ -255,16 +256,16 @@ class AnchorBox:
           anchor boxes with the shape
           `(feature_height * feature_width * num_anchors, 4)`
         """
-        rx = tf.range(feature_width, dtype=tf.float32) + 0.5
-        ry = tf.range(feature_height, dtype=tf.float32) + 0.5
-        centers = tf.stack(tf.meshgrid(rx, ry), axis=-1) * self._strides[level - 3]
-        centers = tf.expand_dims(centers, axis=-2)
-        centers = tf.tile(centers, [1, 1, self._num_anchors, 1])
-        dims = tf.tile(
+        rx = ops.range(feature_width, dtype="float32") + 0.5
+        ry = ops.range(feature_height, dtype="float32") + 0.5
+        centers = ops.stack(ops.meshgrid(rx, ry), axis=-1) * self._strides[level - 3]
+        centers = ops.expand_dims(centers, axis=-2)
+        centers = ops.tile(centers, [1, 1, self._num_anchors, 1])
+        dims = ops.tile(
             self._anchor_dims[level - 3], [feature_height, feature_width, 1, 1]
         )
-        anchors = tf.concat([centers, dims], axis=-1)
-        return tf.reshape(
+        anchors = ops.concat([centers, dims], axis=-1)
+        return ops.reshape(
             anchors, [feature_height * feature_width * self._num_anchors, 4]
         )
 
@@ -281,13 +282,13 @@ class AnchorBox:
         """
         anchors = [
             self._get_anchors(
-                tf.math.ceil(image_height / 2**i),
-                tf.math.ceil(image_width / 2**i),
+                ops.math.ceil(image_height / 2**i),
+                osp.math.ceil(image_width / 2**i),
                 i,
             )
             for i in range(3, 8)
         ]
-        return tf.concat(anchors, axis=0)
+        return ops.concat(anchors, axis=0)
 
 
 """
@@ -317,9 +318,9 @@ def random_flip_horizontal(image, boxes):
     Returns:
       Randomly flipped image and boxes
     """
-    if tf.random.uniform(()) > 0.5:
-        image = tf.image.flip_left_right(image)
-        boxes = tf.stack(
+    if keras.random.uniform(()) > 0.5:
+        image = keras.layers.RandomFlip(mode="HORIZONTAL")(image)
+        boxes = ops.stack(
             [1 - boxes[:, 2], boxes[:, 1], 1 - boxes[:, 0], boxes[:, 3]], axis=-1
         )
     return image, boxes
@@ -355,16 +356,16 @@ def resize_and_pad_image(
       image_shape: Shape of the image before padding.
       ratio: The scaling factor used to resize the image
     """
-    image_shape = tf.cast(tf.shape(image)[:2], dtype=tf.float32)
+    image_shape = ops.cast(ops.shape(image)[:2], dtype="float32")
     if jitter is not None:
-        min_side = tf.random.uniform((), jitter[0], jitter[1], dtype=tf.float32)
-    ratio = min_side / tf.reduce_min(image_shape)
-    if ratio * tf.reduce_max(image_shape) > max_side:
-        ratio = max_side / tf.reduce_max(image_shape)
+        min_side = keras.random.uniform((), jitter[0], jitter[1], dtype="float32")
+    ratio = min_side / ops.reduce_min(image_shape)
+    if ratio * ops.reduce_max(image_shape) > max_side:
+        ratio = max_side / ops.reduce_max(image_shape)
     image_shape = ratio * image_shape
-    image = tf.image.resize(image, tf.cast(image_shape, dtype=tf.int32))
-    padded_image_shape = tf.cast(
-        tf.math.ceil(image_shape / stride) * stride, dtype=tf.int32
+    image = ops.image.resize(image, ops.cast(image_shape, dtype="int32"))
+    padded_image_shape = ops.cast(
+        ops.math.ceil(image_shape / stride) * stride, dtype="int32"
     )
     image = tf.image.pad_to_bounding_box(
         image, 0, 0, padded_image_shape[0], padded_image_shape[1]

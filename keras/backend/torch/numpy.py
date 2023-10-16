@@ -63,6 +63,9 @@ def mean(x, axis=None, keepdims=False):
     if axis == () or axis == []:
         # Torch handles the empty axis case differently from numpy.
         return x
+    elif isinstance(axis, int):
+        axis = (axis,)  # see [NB] below
+
     ori_dtype = standardize_dtype(x.dtype)
     # torch.mean only supports floating point inputs
     compute_dtype = dtypes.result_type(x.dtype, "float32")
@@ -70,8 +73,22 @@ def mean(x, axis=None, keepdims=False):
         result_dtype = compute_dtype
     else:
         result_dtype = ori_dtype
+
+    # [NB] the python torch op torch.mean() is generated into
+    # `torch._C._VariableFunctions.pyi`, and the method
+    # signature is overloaded.
+    # Dynamo won't actually find the correct signature of
+    # `torch.mean()` if arguments are passed via kwargs
+    # So we have to pass the arguments via positional args
+    # EXCEPT for those that are forced as kwargs via the `*`
+    # delimiter in the overloaded method signatures.
+    # Additionally, we have to create a singleton-tuple
+    # when `axis` is an int to match the existing fn signature
     result = torch.mean(
-        x, axis=axis, keepdims=keepdims, dtype=to_torch_dtype(compute_dtype)
+        x,
+        axis,
+        keepdims,
+        dtype=to_torch_dtype(compute_dtype),
     )
     return cast(result, result_dtype)
 
@@ -125,6 +142,9 @@ def absolute(x):
 
 def abs(x):
     x = convert_to_tensor(x)
+    # bool are always non-negative
+    if standardize_dtype(x.dtype) == "bool":
+        return x
     return torch.abs(x)
 
 
@@ -237,12 +257,12 @@ def arctanh(x):
 
 def argmax(x, axis=None):
     x = convert_to_tensor(x)
-    return torch.argmax(x, dim=axis)
+    return cast(torch.argmax(x, dim=axis), dtype="int32")
 
 
 def argmin(x, axis=None):
     x = convert_to_tensor(x)
-    return torch.argmin(x, dim=axis)
+    return cast(torch.argmin(x, dim=axis), dtype="int32")
 
 
 def argsort(x, axis=-1):
@@ -250,7 +270,7 @@ def argsort(x, axis=-1):
     if axis is None:
         axis = -1
         x = x.reshape(-1)
-    return torch.argsort(x, dim=axis, stable=True)
+    return cast(torch.argsort(x, dim=axis, stable=True), dtype="int32")
 
 
 def array(x, dtype=None):
@@ -311,13 +331,21 @@ def broadcast_to(x, shape):
 
 def ceil(x):
     x = convert_to_tensor(x)
-    return torch.ceil(x)
+    if standardize_dtype(x.dtype) == "int64":
+        dtype = config.floatx()
+    else:
+        dtype = dtypes.result_type(x.dtype, float)
+    return cast(torch.ceil(x), dtype=dtype)
 
 
 def clip(x, x_min, x_max):
     x = convert_to_tensor(x)
-    x_min, x_max = convert_to_tensor(x_min), convert_to_tensor(x_max)
-    return torch.clip(x, min=x_min, max=x_max)
+    x_min = convert_to_tensor(x_min)
+    x_max = convert_to_tensor(x_max)
+    dtype = standardize_dtype(x.dtype)
+    if dtype == "bool":
+        dtype = "int64"
+    return cast(torch.clip(x, min=x_min, max=x_max), dtype=dtype)
 
 
 def concatenate(xs, axis=0):
@@ -409,7 +437,11 @@ def digitize(x, bins):
 
 
 def dot(x, y):
-    x, y = convert_to_tensor(x), convert_to_tensor(y)
+    x = convert_to_tensor(x)
+    y = convert_to_tensor(y)
+    result_dtype = dtypes.result_type(x.dtype, y.dtype)
+    x = cast(x, result_dtype)
+    y = cast(y, result_dtype)
     if x.ndim == 0 or y.ndim == 0:
         return torch.multiply(x, y)
     return torch.matmul(x, y)
@@ -936,6 +968,14 @@ def tensordot(x1, x2, axes=2):
     # Conversion to long necessary for `torch.tensordot`
     x1 = cast(x1, "int64") if x1.dtype in TORCH_INT_TYPES else x1
     x2 = cast(x2, "int64") if x2.dtype in TORCH_INT_TYPES else x2
+    # torch only handles dims=((0,), (1,)), numpy accepts axes=(0, 1).
+    if isinstance(axes, (list, tuple)):
+        first, second = axes
+        if not isinstance(first, (list, tuple)):
+            first = (first,)
+        if not isinstance(second, (list, tuple)):
+            second = (second,)
+        axes = (first, second)
     return torch.tensordot(x1, x2, dims=axes)
 
 

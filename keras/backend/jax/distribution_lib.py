@@ -8,6 +8,8 @@ with other backends in the future.
 import jax
 import numpy as np
 
+from keras.utils import jax_utils
+
 
 def list_devices(device_type=None):
     """Return all the available devices based on the device type.
@@ -27,20 +29,96 @@ def list_devices(device_type=None):
     return [f"{device.device_kind}:{device.id}" for device in jax_devices]
 
 
-def distribute_value(value, tensor_layout):
-    """Distribute the value based on the layout.
+def distribute_variable(value, layout):
+    """Create a distributed variable for JAX.
+
+    Since JAX doesn't have a variable class, this will just return a `jax.Array`
+    with the corresponding layout/sharding specified.
+
+    Note that this function should be used in eager context, not in jitted
+    function.
 
     Args:
-        value: `jax.Array` that need to be distributed.
-        tensor_layout: `TensorLayout` for the distribution information, or a
+        value: the initial value of the variable.
+        layout: `TensorLayout` for the created variable, or a
+            `jax.sharding.Sharding` instance.
+
+    Returns:
+        jax.Array which is the distributed variable.
+    """
+    if not isinstance(layout, jax.sharding.Sharding):
+        layout = _to_jax_layout(layout)
+    return jax.device_put(value, layout)
+
+
+def distribute_tensor(tensor, layout):
+    """Distribute the tensor based on the layout.
+
+    Note that this function can be used both in eager context, or within a
+    jitted function.
+
+    Args:
+        tensor: `jax.Array` that need to be distributed.
+        layout: `TensorLayout` for the distribution information, or a
             `jax.sharding.Sharding` instance.
 
     Returns:
         Distributed value.
     """
-    if not isinstance(tensor_layout, jax.sharding.Sharding):
-        tensor_layout = _to_jax_layout(tensor_layout)
-    return jax.device_put(value, tensor_layout)
+    if not isinstance(layout, jax.sharding.Sharding):
+        layout = _to_jax_layout(layout)
+    # TODO(scottzhu): This might not be a cheap check, we should consider
+    # have some proper JAX API for doing this check.
+    if jax_utils.is_in_jax_tracing_scope():
+        return jax.lax.with_sharding_constraint(tensor, layout)
+
+    if layout.is_fully_addressable:
+        return jax.device_put(tensor, layout)
+    else:
+        # Need to only distribute the value to local addressible devices, and
+        # repack them back into global format.
+        mapping = layout.addressable_devices_indices_map(tensor.shape)
+        local_values = jax.device_put(
+            [tensor[i] for i in mapping.values()], list(mapping.keys())
+        )
+        global_value = jax.make_array_from_single_device_arrays(
+            tensor.shape, layout, local_values
+        )
+        return global_value
+
+
+def initialize(job_addresses, num_processes, process_id):
+    if job_addresses and "," in job_addresses:
+        # When user provide all the job addresses, we will split and get the
+        # first one, which is the coordinator.
+        job_addresses = job_addresses.split(",")
+        # Do a sanity check to make sure the number of addresses also match
+        # the num_processes.
+        if num_processes is not None and num_processes != len(job_addresses):
+            raise ValueError(
+                f"The provided job_addresses {job_addresses} has "
+                f"{len(job_addresses)} jobs, but num_processes is "
+                f"{num_processes}"
+            )
+        corrdinator_address = job_addresses[0]
+    else:
+        corrdinator_address = job_addresses
+
+    jax.distributed.initialize(
+        corrdinator_address=corrdinator_address,
+        num_processes=num_processes,
+        process_id=process_id,
+    )
+
+
+def num_processes():
+    """Return the number of processes for the current distribution setting."""
+    return jax.process_count()
+
+
+def process_id():
+    """Return the current process ID for the distribution setting."""
+    return jax.process_index()
 
 
 def _to_jax_device(device_id):

@@ -1,12 +1,12 @@
 import numpy as np
 import tensorflow as tf
 
+import keras
 from keras import layers
 from keras import losses
 from keras import metrics
 from keras import models
 from keras import optimizers
-from keras.utils import rng_utils
 
 
 def test_model_fit():
@@ -19,7 +19,7 @@ def test_model_fit():
         ],
     )
 
-    rng_utils.set_random_seed(1337)
+    keras.utils.set_random_seed(1337)
 
     strategy = tf.distribute.MirroredStrategy(["CPU:0", "CPU:1"])
     with strategy.scope():
@@ -33,11 +33,12 @@ def test_model_fit():
 
     model.summary()
 
-    x = np.random.random((50000, 100))
-    y = np.random.random((50000, 16))
+    x = np.random.random((5000, 100))
+    y = np.random.random((5000, 16))
     batch_size = 32
-    epochs = 5
+    epochs = 2
 
+    # Fit from numpy arrays:
     with strategy.scope():
         model.compile(
             optimizer=optimizers.SGD(learning_rate=0.001, momentum=0.01),
@@ -50,6 +51,15 @@ def test_model_fit():
         history = model.fit(
             x, y, batch_size=batch_size, epochs=epochs, validation_split=0.2
         )
+
+    print("History:")
+    print(history.history)
+
+    # Fit again from distributed dataset:
+    with strategy.scope():
+        dataset = tf.data.Dataset.from_tensor_slices((x, y)).batch(batch_size)
+        dataset = strategy.experimental_distribute_dataset(dataset)
+        history = model.fit(dataset, epochs=epochs)
 
     print("History:")
     print(history.history)

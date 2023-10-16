@@ -148,6 +148,18 @@ class TestTrainer(testing.TestCase, parameterized.TestCase):
         )
         self.assertEqual(len(model_weighted.metrics), 3)
 
+    @pytest.mark.skipif(
+        backend.backend() != "torch",
+        reason="torch backend runs in eager mode for jit_compile='auto'",
+    )
+    def test_compile_eager_vs_jit_torch(self):
+        model = ExampleModel(units=3)
+        model.compile(jit_compile="auto")
+        # torch trainer en/disables torch.compile only based on the value of
+        # model.jit_compile (not model.run_eagerly)
+        self.assertFalse(model.run_eagerly)
+        self.assertFalse(model.jit_compile)
+
     @parameterized.named_parameters(
         [
             ("eager", True, False, False),
@@ -200,6 +212,54 @@ class TestTrainer(testing.TestCase, parameterized.TestCase):
 
     @parameterized.named_parameters(
         [
+            ("eager", True, False, False),
+            ("graph_fn", False, False, False),
+            ("jit", False, True, False),
+            ("steps_per_epoch_eager", True, False, True),
+            ("steps_per_epoch_graph_fn", False, False, True),
+            ("steps_per_epoch_jit", False, True, True),
+        ]
+    )
+    @pytest.mark.requires_trainable_backend
+    def test_fit_with_val_split(
+        self, run_eagerly, jit_compile, use_steps_per_epoch
+    ):
+        if not run_eagerly and not jit_compile and use_steps_per_epoch:
+            if backend.backend() == "tensorflow":
+                self.skipTest(
+                    "TODO: Graph mode without XLA in TF backend leads to "
+                    "unexpected logs, need further checks."
+                )
+
+        model = ExampleModel(units=3)
+        epochs = 3
+        batch_size = 20
+        steps_per_epoch = 7
+        dataset_size = batch_size * (steps_per_epoch - 2)
+        x = np.ones((dataset_size, 4))
+        y = np.zeros((dataset_size, 3))
+
+        model.compile(
+            optimizer=optimizers.SGD(),
+            loss=losses.MeanSquaredError(),
+            metrics=[metrics.MeanSquaredError()],
+            run_eagerly=run_eagerly,
+            jit_compile=jit_compile,
+        )
+        history = model.fit(
+            x,
+            y,
+            batch_size=batch_size,
+            steps_per_epoch=steps_per_epoch if use_steps_per_epoch else None,
+            epochs=epochs,
+            validation_split=0.2,
+        )
+        history = history.history
+        self.assertIn("loss", history)
+        self.assertIn("val_loss", history)
+
+    @parameterized.named_parameters(
+        [
             ("eager", True, False),
             ("graph_fn", False, False),
             ("jit", False, True),
@@ -244,6 +304,14 @@ class TestTrainer(testing.TestCase, parameterized.TestCase):
         outputs = model.predict(x, batch_size=batch_size)
         self.assertAllClose(outputs, 4 * np.ones((100, 3)))
 
+    @parameterized.named_parameters(
+        [
+            ("eager", True, False),
+            ("graph_fn", False, False),
+            ("jit", False, True),
+        ]
+    )
+    def test_predict_flow_struct(self, run_eagerly, jit_compile):
         # Test with input/output structs
         model = StructModel(units=3)
         model.run_eagerly = run_eagerly

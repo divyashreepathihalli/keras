@@ -1,11 +1,20 @@
 import numpy as np
 import pytest
-import tensorflow as tf
 from absl.testing import parameterized
 
 from keras import backend
 from keras import testing
 from keras.backend.common.keras_tensor import KerasTensor
+from keras.layers.convolutional.conv_test import np_conv1d
+from keras.layers.convolutional.conv_test import np_conv2d
+from keras.layers.convolutional.conv_test import np_conv3d
+from keras.layers.convolutional.conv_transpose_test import np_conv1d_transpose
+from keras.layers.convolutional.conv_transpose_test import np_conv2d_transpose
+from keras.layers.convolutional.depthwise_conv_test import np_depthwise_conv2d
+from keras.layers.pooling.average_pooling_test import np_avgpool1d
+from keras.layers.pooling.average_pooling_test import np_avgpool2d
+from keras.layers.pooling.max_pooling_test import np_maxpool1d
+from keras.layers.pooling.max_pooling_test import np_maxpool2d
 from keras.ops import nn as knn
 
 
@@ -121,12 +130,16 @@ class NNOpsDynamicShapeTest(testing.TestCase, parameterized.TestCase):
         # Test 1D conv.
         inputs_1d = KerasTensor([None, 20, 3])
         kernel = KerasTensor([4, 3, 2])
-        self.assertEqual(
-            knn.conv(inputs_1d, kernel, 1, padding="valid").shape, (None, 17, 2)
-        )
-        self.assertEqual(
-            knn.conv(inputs_1d, kernel, 1, padding="same").shape, (None, 20, 2)
-        )
+        for padding in ["valid", "VALID"]:
+            self.assertEqual(
+                knn.conv(inputs_1d, kernel, 1, padding=padding).shape,
+                (None, 17, 2),
+            )
+        for padding in ["same", "SAME"]:
+            self.assertEqual(
+                knn.conv(inputs_1d, kernel, 1, padding=padding).shape,
+                (None, 20, 2),
+            )
         self.assertEqual(
             knn.conv(inputs_1d, kernel, (2,), dilation_rate=2).shape,
             (None, 7, 2),
@@ -135,30 +148,52 @@ class NNOpsDynamicShapeTest(testing.TestCase, parameterized.TestCase):
         # Test 2D conv.
         inputs_2d = KerasTensor([None, 10, None, 3])
         kernel = KerasTensor([2, 2, 3, 2])
-        self.assertEqual(
-            knn.conv(inputs_2d, kernel, 1, padding="valid").shape,
-            (None, 9, None, 2),
-        )
-        self.assertEqual(
-            knn.conv(inputs_2d, kernel, 1, padding="same").shape,
-            (None, 10, None, 2),
-        )
+        for padding in ["valid", "VALID"]:
+            self.assertEqual(
+                knn.conv(inputs_2d, kernel, 1, padding=padding).shape,
+                (None, 9, None, 2),
+            )
+        for padding in ["same", "SAME"]:
+            self.assertEqual(
+                knn.conv(inputs_2d, kernel, 1, padding=padding).shape,
+                (None, 10, None, 2),
+            )
         self.assertEqual(
             knn.conv(inputs_2d, kernel, (2, 1), dilation_rate=(2, 1)).shape,
             (None, 4, None, 2),
         )
 
+        # Test 2D conv - H, W specified
+        inputs_2d = KerasTensor([None, 10, 10, 3])
+        kernel = KerasTensor([2, 2, 3, 2])
+        for padding in ["valid", "VALID"]:
+            self.assertEqual(
+                knn.conv(inputs_2d, kernel, 1, padding=padding).shape,
+                (None, 9, 9, 2),
+            )
+        for padding in ["same", "SAME"]:
+            self.assertEqual(
+                knn.conv(inputs_2d, kernel, 1, padding=padding).shape,
+                (None, 10, 10, 2),
+            )
+        self.assertEqual(
+            knn.conv(inputs_2d, kernel, (2, 1), dilation_rate=(2, 1)).shape,
+            (None, 4, 9, 2),
+        )
+
         # Test 3D conv.
         inputs_3d = KerasTensor([None, 8, None, 8, 3])
         kernel = KerasTensor([3, 3, 3, 3, 2])
-        self.assertEqual(
-            knn.conv(inputs_3d, kernel, 1, padding="valid").shape,
-            (None, 6, None, 6, 2),
-        )
-        self.assertEqual(
-            knn.conv(inputs_3d, kernel, (2, 1, 2), padding="same").shape,
-            (None, 4, None, 4, 2),
-        )
+        for padding in ["valid", "VALID"]:
+            self.assertEqual(
+                knn.conv(inputs_3d, kernel, 1, padding=padding).shape,
+                (None, 6, None, 6, 2),
+            )
+        for padding in ["same", "SAME"]:
+            self.assertEqual(
+                knn.conv(inputs_3d, kernel, (2, 1, 2), padding=padding).shape,
+                (None, 4, None, 4, 2),
+            )
         self.assertEqual(
             knn.conv(
                 inputs_3d, kernel, 1, padding="valid", dilation_rate=(1, 2, 2)
@@ -170,14 +205,18 @@ class NNOpsDynamicShapeTest(testing.TestCase, parameterized.TestCase):
         # Test 1D depthwise conv.
         inputs_1d = KerasTensor([None, 20, 3])
         kernel = KerasTensor([4, 3, 1])
-        self.assertEqual(
-            knn.depthwise_conv(inputs_1d, kernel, 1, padding="valid").shape,
-            (None, 17, 3),
-        )
-        self.assertEqual(
-            knn.depthwise_conv(inputs_1d, kernel, (1,), padding="same").shape,
-            (None, 20, 3),
-        )
+        for padding in ["valid", "VALID"]:
+            self.assertEqual(
+                knn.depthwise_conv(inputs_1d, kernel, 1, padding=padding).shape,
+                (None, 17, 3),
+            )
+        for padding in ["same", "SAME"]:
+            self.assertEqual(
+                knn.depthwise_conv(
+                    inputs_1d, kernel, (1,), padding=padding
+                ).shape,
+                (None, 20, 3),
+            )
         self.assertEqual(
             knn.depthwise_conv(inputs_1d, kernel, 2, dilation_rate=2).shape,
             (None, 7, 3),
@@ -186,14 +225,18 @@ class NNOpsDynamicShapeTest(testing.TestCase, parameterized.TestCase):
         # Test 2D depthwise conv.
         inputs_2d = KerasTensor([None, 10, 10, 3])
         kernel = KerasTensor([2, 2, 3, 1])
-        self.assertEqual(
-            knn.depthwise_conv(inputs_2d, kernel, 1, padding="valid").shape,
-            (None, 9, 9, 3),
-        )
-        self.assertEqual(
-            knn.depthwise_conv(inputs_2d, kernel, (1, 2), padding="same").shape,
-            (None, 10, 5, 3),
-        )
+        for padding in ["valid", "VALID"]:
+            self.assertEqual(
+                knn.depthwise_conv(inputs_2d, kernel, 1, padding=padding).shape,
+                (None, 9, 9, 3),
+            )
+        for padding in ["same", "SAME"]:
+            self.assertEqual(
+                knn.depthwise_conv(
+                    inputs_2d, kernel, (1, 2), padding=padding
+                ).shape,
+                (None, 10, 5, 3),
+            )
         self.assertEqual(
             knn.depthwise_conv(inputs_2d, kernel, 2, dilation_rate=2).shape,
             (None, 4, 4, 3),
@@ -754,22 +797,24 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         x = np.arange(120, dtype=float).reshape([2, 20, 3])
         self.assertAllClose(
             knn.max_pool(x, 2, 1, padding="valid"),
-            tf.nn.max_pool1d(x, 2, 1, padding="VALID"),
+            np_maxpool1d(x, 2, 1, padding="valid", data_format="channels_last"),
         )
         self.assertAllClose(
             knn.max_pool(x, 2, 2, padding="same"),
-            tf.nn.max_pool1d(x, 2, 2, padding="SAME"),
+            np_maxpool1d(x, 2, 2, padding="same", data_format="channels_last"),
         )
 
         # Test 2D max pooling.
         x = np.arange(540, dtype=float).reshape([2, 10, 9, 3])
         self.assertAllClose(
             knn.max_pool(x, 2, 1, padding="valid"),
-            tf.nn.max_pool2d(x, 2, 1, padding="VALID"),
+            np_maxpool2d(x, 2, 1, padding="valid", data_format="channels_last"),
         )
         self.assertAllClose(
             knn.max_pool(x, 2, (2, 1), padding="same"),
-            tf.nn.max_pool2d(x, 2, (2, 1), padding="SAME"),
+            np_maxpool2d(
+                x, 2, (2, 1), padding="same", data_format="channels_last"
+            ),
         )
 
     def test_average_pool_valid_padding(self):
@@ -777,14 +822,14 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         x = np.arange(120, dtype=float).reshape([2, 20, 3])
         self.assertAllClose(
             knn.average_pool(x, 2, 1, padding="valid"),
-            tf.nn.avg_pool1d(x, 2, 1, padding="VALID"),
+            np_avgpool1d(x, 2, 1, padding="valid", data_format="channels_last"),
         )
 
         # Test 2D max pooling.
         x = np.arange(540, dtype=float).reshape([2, 10, 9, 3])
         self.assertAllClose(
             knn.average_pool(x, 2, 1, padding="valid"),
-            tf.nn.avg_pool2d(x, 2, 1, padding="VALID"),
+            np_avgpool2d(x, 2, 1, padding="valid", data_format="channels_last"),
         )
 
     @pytest.mark.skipif(
@@ -796,14 +841,16 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         x = np.arange(120, dtype=float).reshape([2, 20, 3])
         self.assertAllClose(
             knn.average_pool(x, 2, 2, padding="same"),
-            tf.nn.avg_pool1d(x, 2, 2, padding="SAME"),
+            np_avgpool1d(x, 2, 2, padding="same", data_format="channels_last"),
         )
 
         # Test 2D max pooling.
         x = np.arange(540, dtype=float).reshape([2, 10, 9, 3])
         self.assertAllClose(
             knn.average_pool(x, 2, (2, 1), padding="same"),
-            tf.nn.avg_pool2d(x, 2, (2, 1), padding="SAME"),
+            np_avgpool2d(
+                x, 2, (2, 1), padding="same", data_format="channels_last"
+            ),
         )
 
     @parameterized.product(
@@ -825,12 +872,15 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
             padding=padding,
             dilation_rate=dilation_rate,
         )
-        expected = tf.nn.conv1d(
+        expected = np_conv1d(
             inputs_1d,
             kernel,
-            strides,
-            padding=padding.upper(),
-            dilations=dilation_rate,
+            bias_weights=np.zeros((2,)),
+            strides=strides,
+            padding=padding.lower(),
+            data_format="channels_last",
+            dilation_rate=dilation_rate,
+            groups=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -839,19 +889,55 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         kernel = np.arange(24, dtype=float).reshape([2, 2, 3, 2])
 
         outputs = knn.conv(inputs_2d, kernel, 1, padding="valid")
-        expected = tf.nn.conv2d(inputs_2d, kernel, 1, padding="VALID")
+        expected = np_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=1,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
+        )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.conv(inputs_2d, kernel, (1, 2), padding="valid")
-        expected = tf.nn.conv2d(inputs_2d, kernel, (1, 2), padding="VALID")
+        expected = np_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=(1, 2),
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
+        )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.conv(inputs_2d, kernel, (1, 2), padding="same")
-        expected = tf.nn.conv2d(inputs_2d, kernel, (1, 2), padding="SAME")
+        expected = np_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=(1, 2),
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
+        )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.conv(inputs_2d, kernel, 2, padding="same")
-        expected = tf.nn.conv2d(inputs_2d, kernel, 2, padding="SAME")
+        expected = np_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=2,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
+        )
         self.assertAllClose(outputs, expected)
 
         # Test group > 1.
@@ -860,8 +946,15 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         outputs = knn.conv(
             inputs_2d, kernel, 2, padding="same", dilation_rate=1
         )
-        expected = tf.nn.conv2d(
-            inputs_2d, kernel, 2, padding="SAME", dilations=1
+        expected = np_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((6,)),
+            strides=2,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -872,12 +965,15 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
             padding="same",
             dilation_rate=(2, 1),
         )
-        expected = tf.nn.conv2d(
+        expected = np_conv2d(
             inputs_2d,
             kernel,
-            1,
-            padding="SAME",
-            dilations=(2, 1),
+            bias_weights=np.zeros((6,)),
+            strides=1,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=(2, 1),
+            groups=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -886,8 +982,15 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         kernel = np.arange(162, dtype=float).reshape([3, 3, 3, 3, 2])
 
         outputs = knn.conv(inputs_3d, kernel, 1, padding="valid")
-        expected = tf.nn.conv3d(
-            inputs_3d, kernel, (1, 1, 1, 1, 1), padding="VALID"
+        expected = np_conv3d(
+            inputs_3d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=(1, 1, 1),
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected, rtol=1e-5, atol=1e-5)
 
@@ -898,24 +1001,41 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
             padding="valid",
             dilation_rate=(1, 1, 1),
         )
-        expected = tf.nn.conv3d(
+        expected = np_conv3d(
             inputs_3d,
             kernel,
-            (1, 1, 1, 1, 1),
-            padding="VALID",
-            dilations=(1, 1, 1, 1, 1),
+            bias_weights=np.zeros((2,)),
+            strides=(1, 1, 1),
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=(1, 1, 1),
+            groups=1,
         )
         self.assertAllClose(outputs, expected, rtol=1e-5, atol=1e-5)
 
         outputs = knn.conv(inputs_3d, kernel, 2, padding="valid")
-        expected = tf.nn.conv3d(
-            inputs_3d, kernel, (1, 2, 2, 2, 1), padding="VALID"
+        expected = np_conv3d(
+            inputs_3d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=2,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected, rtol=1e-5, atol=1e-5)
 
         outputs = knn.conv(inputs_3d, kernel, 2, padding="same")
-        expected = tf.nn.conv3d(
-            inputs_3d, kernel, (1, 2, 2, 2, 1), padding="SAME"
+        expected = np_conv3d(
+            inputs_3d,
+            kernel,
+            bias_weights=np.zeros((2,)),
+            strides=2,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected, rtol=1e-5, atol=1e-5)
 
@@ -924,28 +1044,52 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         kernel = np.arange(24, dtype=float).reshape([2, 2, 3, 2])
 
         outputs = knn.depthwise_conv(inputs_2d, kernel, 1, padding="valid")
-        expected = tf.nn.depthwise_conv2d(
-            inputs_2d, kernel, (1, 1, 1, 1), padding="VALID"
+        expected = np_depthwise_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((6,)),
+            strides=1,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.depthwise_conv(inputs_2d, kernel, (1, 1), padding="valid")
-        expected = tf.nn.depthwise_conv2d(
-            inputs_2d, kernel, (1, 1, 1, 1), padding="VALID"
+        expected = np_depthwise_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((6,)),
+            strides=(1, 1),
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.depthwise_conv(inputs_2d, kernel, (2, 2), padding="same")
-        expected = tf.nn.depthwise_conv2d(
-            inputs_2d, kernel, (1, 2, 2, 1), padding="SAME"
+        expected = np_depthwise_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((6,)),
+            strides=(2, 2),
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.depthwise_conv(
             inputs_2d, kernel, 1, padding="same", dilation_rate=(2, 2)
         )
-        expected = tf.nn.depthwise_conv2d(
-            inputs_2d, kernel, (1, 1, 1, 1), padding="SAME", dilations=(2, 2)
+        expected = np_depthwise_conv2d(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros((6,)),
+            strides=1,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=(2, 2),
         )
         self.assertAllClose(outputs, expected)
 
@@ -958,12 +1102,25 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         outputs = knn.separable_conv(
             inputs_2d, depthwise_kernel, pointwise_kernel, 1, padding="valid"
         )
-        expected = tf.nn.separable_conv2d(
+        # Depthwise followed by pointwise conv
+        expected_depthwise = np_depthwise_conv2d(
             inputs_2d,
             depthwise_kernel,
+            np.zeros(6),
+            strides=1,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
+        )
+        expected = np_conv2d(
+            expected_depthwise,
             pointwise_kernel,
-            (1, 1, 1, 1),
-            padding="VALID",
+            np.zeros(6 * 12),
+            strides=1,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -974,24 +1131,30 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
             (1, 1),
             padding="valid",
         )
-        expected = tf.nn.separable_conv2d(
-            inputs_2d,
-            depthwise_kernel,
-            pointwise_kernel,
-            (1, 1, 1, 1),
-            padding="VALID",
-        )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.separable_conv(
             inputs_2d, depthwise_kernel, pointwise_kernel, 2, padding="same"
         )
-        expected = tf.nn.separable_conv2d(
+        # Depthwise followed by pointwise conv
+        expected_depthwise = np_depthwise_conv2d(
             inputs_2d,
             depthwise_kernel,
+            np.zeros(6),
+            strides=2,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+        )
+        expected = np_conv2d(
+            expected_depthwise,
             pointwise_kernel,
-            (1, 2, 2, 1),
-            padding="SAME",
+            np.zeros(6 * 12),
+            strides=1,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -1003,13 +1166,25 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
             padding="same",
             dilation_rate=(2, 2),
         )
-        expected = tf.nn.separable_conv2d(
+        # Depthwise followed by pointwise conv
+        expected_depthwise = np_depthwise_conv2d(
             inputs_2d,
             depthwise_kernel,
+            np.zeros(6),
+            strides=1,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=(2, 2),
+        )
+        expected = np_conv2d(
+            expected_depthwise,
             pointwise_kernel,
-            (1, 1, 1, 1),
-            padding="SAME",
-            dilations=(2, 2),
+            np.zeros(6 * 12),
+            strides=1,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
+            groups=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -1017,14 +1192,28 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         inputs_1d = np.arange(24, dtype=float).reshape([2, 4, 3])
         kernel = np.arange(30, dtype=float).reshape([2, 5, 3])
         outputs = knn.conv_transpose(inputs_1d, kernel, 2, padding="valid")
-        expected = tf.nn.conv_transpose(
-            inputs_1d, kernel, [2, 8, 5], 2, padding="VALID"
+        expected = np_conv1d_transpose(
+            inputs_1d,
+            kernel,
+            bias_weights=np.zeros(5),
+            strides=2,
+            output_padding=None,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.conv_transpose(inputs_1d, kernel, 2, padding="same")
-        expected = tf.nn.conv_transpose(
-            inputs_1d, kernel, [2, 8, 5], 2, padding="SAME"
+        expected = np_conv1d_transpose(
+            inputs_1d,
+            kernel,
+            bias_weights=np.zeros(5),
+            strides=2,
+            output_padding=None,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
@@ -1033,46 +1222,70 @@ class NNOpsCorrectnessTest(testing.TestCase, parameterized.TestCase):
         kernel = np.arange(60, dtype=float).reshape([2, 2, 5, 3])
 
         outputs = knn.conv_transpose(inputs_2d, kernel, (2, 2), padding="valid")
-        expected = tf.nn.conv_transpose(
-            inputs_2d, kernel, [2, 8, 8, 5], (2, 2), padding="VALID"
+        expected = np_conv2d_transpose(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros(5),
+            strides=(2, 2),
+            output_padding=None,
+            padding="valid",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
         outputs = knn.conv_transpose(inputs_2d, kernel, 2, padding="same")
-        expected = tf.nn.conv_transpose(
-            inputs_2d, kernel, [2, 8, 8, 5], 2, padding="SAME"
+        expected = np_conv2d_transpose(
+            inputs_2d,
+            kernel,
+            bias_weights=np.zeros(5),
+            strides=2,
+            output_padding=None,
+            padding="same",
+            data_format="channels_last",
+            dilation_rate=1,
         )
         self.assertAllClose(outputs, expected)
 
     def test_one_hot(self):
         # Test 1D one-hot.
         indices_1d = np.array([0, 1, 2, 3])
-        self.assertAllClose(
-            knn.one_hot(indices_1d, 4), tf.one_hot(indices_1d, 4)
-        )
+        self.assertAllClose(knn.one_hot(indices_1d, 4), np.eye(4)[indices_1d])
         self.assertAllClose(
             knn.one_hot(indices_1d, 4, axis=0),
-            tf.one_hot(indices_1d, 4, axis=0),
+            np.eye(4)[indices_1d],
         )
 
         # Test 2D one-hot.
         indices_2d = np.array([[0, 1], [2, 3]])
-        self.assertAllClose(
-            knn.one_hot(indices_2d, 4), tf.one_hot(indices_2d, 4)
-        )
+        self.assertAllClose(knn.one_hot(indices_2d, 4), np.eye(4)[indices_2d])
         self.assertAllClose(
             knn.one_hot(indices_2d, 4, axis=2),
-            tf.one_hot(indices_2d, 4, axis=2),
+            np.eye(4)[indices_2d],
         )
         self.assertAllClose(
             knn.one_hot(indices_2d, 4, axis=1),
-            tf.one_hot(indices_2d, 4, axis=1),
+            np.transpose(np.eye(4)[indices_2d], (0, 2, 1)),
         )
 
         # Test 1D one-hot with negative inputs
         indices_1d = np.array([0, -1, -1, 3])
         self.assertAllClose(
-            knn.one_hot(indices_1d, 4), tf.one_hot(indices_1d, 4)
+            knn.one_hot(indices_1d, 4),
+            np.array(
+                [
+                    [1, 0, 0, 0],
+                    [0, 0, 0, 0],
+                    [0, 0, 0, 0],
+                    [
+                        0,
+                        0,
+                        0,
+                        1,
+                    ],
+                ],
+                dtype=np.float32,
+            ),
         )
 
     def test_binary_crossentropy(self):

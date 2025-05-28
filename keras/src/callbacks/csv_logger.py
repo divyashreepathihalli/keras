@@ -37,6 +37,7 @@ class CSVLogger(Callback):
         self.writer = None
         self.keys = None
         self.append_header = True
+        self.csv_file = None # Initialize csv_file
 
     def on_train_begin(self, logs=None):
         if self.append:
@@ -46,7 +47,14 @@ class CSVLogger(Callback):
             mode = "a"
         else:
             mode = "w"
+        # It's good practice to ensure csv_file is None or closed before reassigning
+        if self.csv_file and not self.csv_file.closed:
+            self.csv_file.close()
         self.csv_file = file_utils.File(self.filename, mode)
+        # Reset writer and keys for potential re-training with the same callback instance
+        self.writer = None
+        self.keys = None
+
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -64,23 +72,27 @@ class CSVLogger(Callback):
                 return k
 
         if self.keys is None:
+            # Initialize keys from the first logs received
             self.keys = sorted(logs.keys())
-            # When validation_freq > 1, `val_` keys are not in first epoch logs
-            # Add the `val_` keys so that its part of the fieldnames of writer.
-            val_keys_found = False
-            for key in self.keys:
-                if key.startswith("val_"):
-                    val_keys_found = True
-                    break
-            if not val_keys_found:
-                self.keys.extend(["val_" + k for k in self.keys])
+
+            # Check if the model is expected to produce validation metrics.
+            # `self.model.metrics_names` should contain all metric names,
+            # including 'val_...' if validation is configured.
+            if hasattr(self.model, "metrics_names"):
+                expected_metrics = self.model.metrics_names
+                for m_name in expected_metrics:
+                    # If a validation metric is expected by the model but not in current log keys
+                    # (e.g., due to validation_freq > 1), add it to self.keys.
+                    if m_name.startswith("val_") and m_name not in self.keys:
+                        self.keys.append(m_name)
+ 
 
         if not self.writer:
-
             class CustomDialect(csv.excel):
                 delimiter = self.sep
 
-            fieldnames = ["epoch"] + self.keys
+            # Fieldnames should always include "epoch" and then the determined keys
+            fieldnames = ["epoch"] + (self.keys or []) # Ensure self.keys is not None
 
             self.writer = csv.DictWriter(
                 self.csv_file, fieldnames=fieldnames, dialect=CustomDialect
@@ -96,5 +108,6 @@ class CSVLogger(Callback):
         self.csv_file.flush()
 
     def on_train_end(self, logs=None):
-        self.csv_file.close()
+        if self.csv_file and not self.csv_file.closed:
+            self.csv_file.close()
         self.writer = None

@@ -334,6 +334,12 @@ def is_tensor(x):
 # ... (rest of the backend file: convert_to_numpy, shape, cast, etc.)
 # ... (rest of the file)
 
+def convert_to_numpy(x):
+    if isinstance(x, jax_sparse.JAXSparse):
+        x = x.todense()
+    if is_tensor(x) and x.dtype == "bfloat16":
+        return np.array(x, dtype=ml_dtypes.bfloat16)
+    return np.array(x)
 
 def shape(x):
     # This will work as long as we disallow

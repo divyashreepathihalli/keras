@@ -1,11 +1,10 @@
 import collections
 import csv
-
 import numpy as np
-
 from keras.src.api_export import keras_export
 from keras.src.callbacks.callback import Callback
 from keras.src.utils import file_utils
+import os
 
 
 @keras_export("keras.callbacks.CSVLogger")
@@ -37,16 +36,30 @@ class CSVLogger(Callback):
         self.writer = None
         self.keys = None
         self.append_header = True
+        self._will_do_validation = False # Initialize instance variable
 
     def on_train_begin(self, logs=None):
+        # Check if validation will be performed, set by the model's fit method
+        # self.params is set by the base CallbackList.set_params method
+        # params["do_validation"] = bool(val_data or validation_split)
+        self._will_do_validation = self.params.get("do_validation", False)
+
         if self.append:
             if file_utils.exists(self.filename):
                 with file_utils.File(self.filename, "r") as f:
-                    self.append_header = not bool(len(f.readline()))
+                    # Check if the file is empty or if the first line is empty
+                    first_line = f.readline()
+                    self.append_header = not bool(first_line.strip())
             mode = "a"
         else:
             mode = "w"
+
+        # Ensure the directory exists if filename includes a path
+        if os.path.dirname(self.filename):
+            os.makedirs(os.path.dirname(self.filename), exist_ok=True)
+
         self.csv_file = file_utils.File(self.filename, mode)
+
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -64,16 +77,30 @@ class CSVLogger(Callback):
                 return k
 
         if self.keys is None:
-            self.keys = sorted(logs.keys())
-            # When validation_freq > 1, `val_` keys are not in first epoch logs
-            # Add the `val_` keys so that its part of the fieldnames of writer.
-            val_keys_found = False
-            for key in self.keys:
-                if key.startswith("val_"):
-                    val_keys_found = True
-                    break
-            if not val_keys_found:
-                self.keys.extend(["val_" + k for k in self.keys])
+            # Initialize self.keys from the logs of the first epoch
+            current_epoch_keys = sorted(list(logs.keys())) # Ensure it's a list and sorted
+            self.keys = list(current_epoch_keys) # Use a copy
+
+            if self._will_do_validation:
+                # If validation is expected, ensure val_ versions of training keys are present.
+                # This handles validation_freq > 1 where val_keys might not be in the first epoch.
+
+                # Identify training-like keys from the first epoch's logs
+                # (those that don't already start with "val_")
+                training_keys_from_first_epoch = [
+                    k for k in current_epoch_keys if not k.startswith("val_")
+                ]
+
+                for train_key in training_keys_from_first_epoch:
+                    val_key_to_add = "val_" + train_key
+                    if val_key_to_add not in self.keys:
+                        self.keys.append(val_key_to_add)
+
+                # Ensure final keys are sorted for consistent header
+                self.keys.sort()
+            # If not self._will_do_validation, self.keys will only contain
+            # what was in current_epoch_keys (i.e., no val_* keys unless
+            # they unexpectedly came from logs, which shouldn't happen).
 
         if not self.writer:
 
@@ -96,5 +123,6 @@ class CSVLogger(Callback):
         self.csv_file.flush()
 
     def on_train_end(self, logs=None):
-        self.csv_file.close()
+        if hasattr(self, 'csv_file') and self.csv_file: # Check if csv_file was opened
+            self.csv_file.close()
         self.writer = None

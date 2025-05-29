@@ -11,6 +11,24 @@ from keras.src.utils import python_utils
 from keras.src.utils import traceback_utils
 from keras.src.utils.naming import auto_name
 
+# --- MODIFICATION START: Add ObjectState import ---
+_SUCCESSFUL_OBJECT_STATE_IMPORT_FOR_OPERATION = None
+try:
+    from flax.nnx.object import ObjectState
+    _SUCCESSFUL_OBJECT_STATE_IMPORT_FOR_OPERATION = "flax.nnx.object.ObjectState"
+except ImportError:
+    try:
+        from flax.experimental.nnx.object import ObjectState
+        _SUCCESSFUL_OBJECT_STATE_IMPORT_FOR_OPERATION = "flax.experimental.nnx.object.ObjectState"
+    except ImportError:
+        ObjectState = None # Placeholder if not found
+
+if _SUCCESSFUL_OBJECT_STATE_IMPORT_FOR_OPERATION:
+    print(f"INFO: Operation.py will use ObjectState from: {_SUCCESSFUL_OBJECT_STATE_IMPORT_FOR_OPERATION}")
+elif ObjectState is None: # Only print error if it truly couldn't be found
+    print("ERROR: Operation.py: ObjectState could not be imported. NNX JAX backend may fail.")
+# --- MODIFICATION END ---
+
 
 @keras_export("keras.Operation")
 class Operation:
@@ -118,7 +136,27 @@ class Operation:
         out of the box in most cases without forcing the user
         to manually implement `get_config()`.
         """
-        instance = super(Operation, cls).__new__(cls)
+        instance = super(Operation, cls).__new__(cls) # This calls object.__new__(cls)
+
+        # --- MODIFICATION START: Set _object__state for JAX/NNX backend ---
+        if ObjectState is not None:
+            import os # Import os here locally for this check
+            if os.environ.get("KERAS_BACKEND") == "jax":
+                # Check if cls is an nnx.Module subclass. This is crucial.
+                # This check should be as lightweight as possible at import time.
+                # We assume if it's JAX backend, and NNX is involved, flax is available.
+                try:
+                    from flax.nnx import Module as NnxModuleFlag
+                except ImportError:
+                    try:
+                        from flax.experimental.nnx import Module as NnxModuleFlag
+                    except ImportError:
+                        NnxModuleFlag = None
+                
+                if NnxModuleFlag and issubclass(cls, NnxModuleFlag):
+                    vars(instance)['_object__state'] = ObjectState()
+                    # print(f"INFO: Operation.__new__ for {cls.__name__}: Set _object__state for JAX/NNX.")
+        # --- MODIFICATION END ---
 
         # Generate a config to be returned by default by `get_config()`.
         arg_names = inspect.getfullargspec(cls.__init__).args
@@ -148,7 +186,7 @@ class Operation:
         except TypeError:
             auto_config = False
         try:
-            instance._lock = False
+            instance._lock = False # This line must be AFTER _object__state is set for NNX case
             if auto_config:
                 from keras.src.saving import serialization_lib
 

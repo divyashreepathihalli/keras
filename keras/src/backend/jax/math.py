@@ -290,7 +290,7 @@ def norm(x, ord=None, axis=None, keepdims=False):
 
 
 def logdet(x):
-    from keras.src.backend.jax.numpy import slogdet
+    from keras.src.backend.jax.jax_numpy_ops import slogdet
 
     # In JAX (like in NumPy) slogdet is more stable than
     # `np.log(np.linalg.det(x))`. See

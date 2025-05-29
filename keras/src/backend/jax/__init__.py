@@ -4,8 +4,8 @@ from keras.src.backend.jax import image
 from keras.src.backend.jax import linalg
 from keras.src.backend.jax import math
 from keras.src.backend.jax import nn
-from keras.src.backend.jax import numpy
-from keras.src.backend.jax import random
+from keras.src.backend.jax import jax_numpy_ops as numpy
+from keras.src.backend.jax import jax_random_ops as random
 from keras.src.backend.jax import tensorboard
 from keras.src.backend.jax.core import IS_THREAD_SAFE
 from keras.src.backend.jax.core import SUPPORTS_RAGGED_TENSORS

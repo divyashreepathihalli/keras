@@ -37,7 +37,6 @@ class CSVLogger(Callback):
         self.writer = None
         self.keys = None
         self.append_header = True
-        self.csv_file = None
 
     def on_train_begin(self, logs=None):
         if self.append:
@@ -47,13 +46,7 @@ class CSVLogger(Callback):
             mode = "a"
         else:
             mode = "w"
-        # ensure csv_file is None or closed before reassigning
-        if self.csv_file and not self.csv_file.closed:
-            self.csv_file.close()
         self.csv_file = file_utils.File(self.filename, mode)
-        # Reset writer and keys
-        self.writer = None
-        self.keys = None
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
@@ -72,13 +65,14 @@ class CSVLogger(Callback):
 
         if self.keys is None:
             self.keys = sorted(logs.keys())
-
+            # When validation_freq > 1, `val_` keys are not in first epoch logs
+            # Add the `val_` keys so that its part of the fieldnames of writer.
             val_keys_found = False
             for key in self.keys:
                 if key.startswith("val_"):
                     val_keys_found = True
                     break
-            if not val_keys_found and self.keys:
+            if not val_keys_found:
                 self.keys.extend(["val_" + k for k in self.keys])
 
         if not self.writer:
@@ -86,7 +80,7 @@ class CSVLogger(Callback):
             class CustomDialect(csv.excel):
                 delimiter = self.sep
 
-            fieldnames = ["epoch"] + (self.keys or [])
+            fieldnames = ["epoch"] + self.keys
 
             self.writer = csv.DictWriter(
                 self.csv_file, fieldnames=fieldnames, dialect=CustomDialect
@@ -102,6 +96,5 @@ class CSVLogger(Callback):
         self.csv_file.flush()
 
     def on_train_end(self, logs=None):
-        if self.csv_file and not self.csv_file.closed:
-            self.csv_file.close()
+        self.csv_file.close()
         self.writer = None

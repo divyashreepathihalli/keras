@@ -118,6 +118,105 @@ class Variable(KerasVariable, nnx.Variable):
 
         # Note: _layout was already set in Stage 2.
 
+    def __getstate__(self):
+        # Get the state from KerasVariable (attributes in __dict__)
+        # KerasVariable does not have a custom __getstate__, so we mimic default behavior.
+        keras_state = self.__dict__.copy()
+
+        # Get the state from nnx.Variable
+        # nnx.Variable has __slots__, so its __getstate__ is the way to get these.
+        # We need to call it carefully due to MRO.
+        # super(KerasVariable, self) refers to nnx.Variable in the MRO.
+        nnx_specific_state = super(KerasVariable, self).__getstate__()
+
+        # Merge them. Keras state is primary. NNX specific state adds to it.
+        # If there are overlaps, decide on the source of truth.
+        # For example, 'raw_value' from NNX is the canonical value.
+        # Keras's '_value' should be consistent with it.
+        # The nnx_specific_state is {'raw_value': ..., '_trace_state': ..., '_var_metadata': ...}
+        
+        # Ensure the canonical value is from raw_value for serialization
+        # keras_state['_value'] will store the JAX array.
+        # We've ensured _value and raw_value are kept in sync.
+        # Let's trust that keras_state['_value'] is correct as per our sync logic.
+        # Or, to be absolutely sure, we can overwrite it:
+        if 'raw_value' in nnx_specific_state:
+             keras_state['_value'] = nnx_specific_state['raw_value']
+
+        # Add NNX attributes that are not in Keras's __dict__
+        # These are '_trace_state' and '_var_metadata'. 'raw_value' is handled via '_value'.
+        if '_trace_state' in nnx_specific_state:
+            keras_state['_trace_state'] = nnx_specific_state['_trace_state']
+        if '_var_metadata' in nnx_specific_state:
+            keras_state['_var_metadata'] = nnx_specific_state['_var_metadata']
+        
+        # Remove elements that might be problematic or redundant if nnx.Variable's __getstate__
+        # was more complex or if KerasVariable had its own __getstate__ that nnx.Variable called.
+        # For now, this explicit merge should be okay.
+        # If 'raw_value' key exists in keras_state (it shouldn't if not in __dict__), remove it.
+        keras_state.pop('raw_value', None)
+
+
+        # Attributes like self._layout are JAX backend specific and part of KerasVariable's __dict__
+        # so they are already in keras_state.
+
+        return keras_state
+
+    def __setstate__(self, state):
+        # First, restore the KerasVariable portion using its __dict__ attributes
+        # This includes _name, _trainable, _dtype, _shape, _layout, etc.
+        # and importantly _value, which __getstate__ sourced from raw_value.
+        
+        # Separate nnx specific keys that we added if they are not part of Keras __dict__
+        # Our __getstate__ puts them into the main state dictionary.
+        nnx_raw_value = state['_value'] # This was raw_value
+        nnx_trace_state = state.pop('_trace_state', None) # Remove to avoid polluting Keras __dict__ if not originally there
+        nnx_var_metadata = state.pop('_var_metadata', None) # Remove for same reason
+
+        # Populate the instance's __dict__ with the Keras attributes.
+        # This is what default unpickling would do for KerasVariable.
+        self.__dict__.update(state)
+
+        # Now, restore the nnx.Variable specific slotted attributes.
+        # We use object.__setattr__ for slots.
+        object.__setattr__(self, 'raw_value', nnx_raw_value)
+        
+        if nnx_trace_state is not None:
+            object.__setattr__(self, '_trace_state', nnx_trace_state)
+        else:
+            # Initialize to default if not in state (e.g. older pickle format)
+            # Requires importing tracers from nnx if not already available globally in nnx
+            # from flax.experimental.nnx import tracers # Might be needed
+            # object.__setattr__(self, '_trace_state', tracers.TraceState())
+            # For now, assume it should be in the state if saved by our __getstate__
+            # If it's critical and might be missing, a default init is safer.
+            # Let's assume our __getstate__ ensures it's there.
+             pass
+
+
+        if nnx_var_metadata is not None:
+            object.__setattr__(self, '_var_metadata', nnx_var_metadata)
+        else:
+            # object.__setattr__(self, '_var_metadata', {}) # Default if missing
+            pass
+            
+        # Ensure Keras's self._value is also consistent with the restored raw_value
+        # self.__dict__update(state) should have set self._value from state['_value']
+        # and state['_value'] was set to nnx_specific_state['raw_value'] in __getstate__.
+        # So self._value should be correct. For safety:
+        object.__setattr__(self, '_value', nnx_raw_value)
+
+        # After __setstate__, the variable should be fully constituted.
+        # KerasVariable's __init__ logic (like _validate_shape, _initialize) is bypassed,
+        # so the state must contain all necessary info.
+        # self._ndim is usually set in KerasVariable.__init__ based on shape.
+        # If shape is in state, we might need to re-calculate ndim.
+        if hasattr(self, '_shape') and self._shape is not None:
+            self._ndim = len(self._shape)
+        else:
+            # Fallback if shape isn't immediately available, though it should be from Keras state.
+            self._ndim = len(self.raw_value.shape)
+
     def _initialize(self, value):
         # Note that variable.shape is needed by distribution_lib
         self._shape = self._validate_shape(value.shape)

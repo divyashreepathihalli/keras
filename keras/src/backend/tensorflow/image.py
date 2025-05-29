@@ -111,8 +111,191 @@ def resize(
     fill_value=0.0,
     data_format=None,
 ):
-    data_format = backend.standardize_data_format(data_format)
-    if interpolation not in RESIZE_INTERPOLATIONS:
+    images_tensor = convert_to_tensor(images)
+    original_rank = len(images_tensor.shape)
+    # original_input_images_dtype is used by keras.ops.image._resize for final cast, not directly here.
+
+    # Determine if the custom gradient path for bilinear float16 should be used
+    use_custom_bilinear_grad = False
+    if interpolation == "bilinear":
+        try:
+            # Accessing dtype policy via backend.config to avoid potential circular imports
+            # and ensure we get the actual configured policy for the TF backend.
+            if backend.config.dtype_policy().compute_dtype == "float16":
+                use_custom_bilinear_grad = True
+        except Exception: 
+            # Fallback if dtype_policy is not available/configured, or if backend.config is not yet populated
+            # This might happen in some standalone TF usage scenarios.
+            pass
+
+    # Standardize data_format for internal processing: all core ops here expect channels_last.
+    original_data_format_str = backend.standardize_data_format(data_format)
+    
+    images_channels_last = images_tensor
+    if original_data_format_str == "channels_first":
+        if original_rank == 4: # Batch of images
+            images_channels_last = tf.transpose(images_tensor, (0, 2, 3, 1))
+        elif original_rank == 3: # Single image
+            images_channels_last = tf.transpose(images_tensor, (1, 2, 0))
+        # If rank is not 3 or 4, validation later will catch it.
+    
+    # Validate common arguments after data_format standardization
+    if not len(size) == 2:
+        raise ValueError(
+            "Argument `size` must be a tuple of two elements "
+            f"(height, width). Received: size={size}"
+        )
+    _size_tuple = tuple(size) # Ensure it's a tuple for tf.image.resize
+
+    # Rank check on the channels_last version of the tensor
+    current_rank = len(images_channels_last.shape)
+    if current_rank not in (3, 4):
+        raise ValueError(
+            "Invalid images rank after data_format standardization: expected rank 3 (single image) "
+            "or rank 4 (batch of images). "
+            f"Received tensor with shape: {images_channels_last.shape}"
+        )
+
+    if use_custom_bilinear_grad:
+        # Input to our custom grad op must be float16 and channels_last.
+        images_float16_channels_last = tf.cast(images_channels_last, tf.float16)
+        
+        # _resize_bilinear_with_float16_grad expects channels_last input.
+        # Its forward pass returns float32.
+        resized_images_channels_last = _resize_bilinear_with_float16_grad(
+            images_float16_channels_last, _size_tuple, antialias
+        )
+    else:
+        # Standard path for other interpolations or dtypes.
+        # `images_channels_last` is already prepared.
+        if interpolation not in RESIZE_INTERPOLATIONS:
+            raise ValueError(
+                "Invalid value for argument `interpolation`. Expected of one "
+                f"{RESIZE_INTERPOLATIONS}. Received: interpolation={interpolation}"
+            )
+        # fill_mode is only relevant if pad_to_aspect_ratio is True for the Keras API,
+        # but tf.image.resize doesn't directly use fill_mode.
+        # tf.pad is used if pad_to_aspect_ratio=True.
+        if fill_mode != "constant" and pad_to_aspect_ratio: # check fill_mode only when pad_to_aspect_ratio is True
+            raise ValueError(
+                "Invalid value for argument `fill_mode`. Only `'constant'` "
+                f"is supported when `pad_to_aspect_ratio` is True. Received: fill_mode={fill_mode}"
+            )
+        if pad_to_aspect_ratio and crop_to_aspect_ratio:
+            raise ValueError(
+                "Only one of `pad_to_aspect_ratio` & `crop_to_aspect_ratio` "
+                "can be `True`."
+            )
+
+        images_to_resize_standard_path = images_channels_last
+
+        if crop_to_aspect_ratio:
+            shape = tf.shape(images_to_resize_standard_path)
+            height, width = shape[-3], shape[-2]
+            target_height_crop, target_width_crop = _size_tuple # Renamed to avoid conflict with outer scope
+            
+            # Determine dimensions for central crop to maintain aspect ratio then resize
+            if tf.cast(target_width_crop, tf.float32) * tf.cast(height, tf.float32) > \
+               tf.cast(target_height_crop, tf.float32) * tf.cast(width, tf.float32):
+                new_h = tf.cast(tf.cast(width, tf.float32) * tf.cast(target_height_crop, tf.float32) / tf.cast(target_width_crop, tf.float32), tf.int32)
+                new_w = width
+            else:
+                new_w = tf.cast(tf.cast(height, tf.float32) * tf.cast(target_width_crop, tf.float32) / tf.cast(target_height_crop, tf.float32), tf.int32)
+                new_h = height
+
+            new_h = tf.maximum(1, tf.minimum(height, new_h))
+            new_w = tf.maximum(1, tf.minimum(width, new_w))
+
+            offset_h = (height - new_h) // 2
+            offset_w = (width - new_w) // 2
+            
+            if current_rank == 4:
+                images_to_resize_standard_path = images_to_resize_standard_path[
+                    :, offset_h:offset_h + new_h, offset_w:offset_w + new_w, :
+                ]
+            else: # rank 3
+                images_to_resize_standard_path = images_to_resize_standard_path[
+                    offset_h:offset_h + new_h, offset_w:offset_w + new_w, :
+                ]
+
+        elif pad_to_aspect_ratio:
+            shape_in = tf.shape(images_to_resize_standard_path)
+            h_in, w_in = shape_in[-3], shape_in[-2]
+            target_h_final, target_w_final = _size_tuple
+
+            aspect_ratio_input = tf.cast(w_in, tf.float32) / tf.cast(h_in, tf.float32)
+            aspect_ratio_target = tf.cast(target_w_final, tf.float32) / tf.cast(target_h_final, tf.float32)
+
+            padded_h, padded_w = h_in, w_in
+            if aspect_ratio_input < aspect_ratio_target: 
+                padded_w = tf.cast(tf.cast(h_in, tf.float32) * aspect_ratio_target, tf.int32)
+            elif aspect_ratio_input > aspect_ratio_target: 
+                padded_h = tf.cast(tf.cast(w_in, tf.float32) / aspect_ratio_target, tf.int32)
+            
+            pad_h_total = tf.maximum(0, padded_h - h_in)
+            pad_w_total = tf.maximum(0, padded_w - w_in)
+
+            pad_top = pad_h_total // 2
+            pad_bottom = pad_h_total - pad_top
+            pad_left = pad_w_total // 2
+            pad_right = pad_w_total - pad_left
+
+            paddings_tf = []
+            if current_rank == 4:
+                paddings_tf = [[0,0], [pad_top, pad_bottom], [pad_left, pad_right], [0,0]]
+            else: # rank 3
+                paddings_tf = [[pad_top, pad_bottom], [pad_left, pad_right], [0,0]]
+            
+            if tf.reduce_sum(tf.cast(tf.greater(tf.stack(tf.reshape(paddings_tf, [-1])), 0), tf.int32)) > 0:
+                 images_to_resize_standard_path = tf.pad(
+                    images_to_resize_standard_path, paddings_tf, mode="CONSTANT", constant_values=fill_value
+                )
+        
+        resized_images_channels_last = tf.image.resize(
+            images_to_resize_standard_path, _size_tuple, method=interpolation, antialias=antialias
+        )
+
+    # Transpose back if original data_format was channels_first
+    final_resized_images = resized_images_channels_last
+    if original_data_format_str == "channels_first":
+        if original_rank == 4: # Use original_rank to decide transpose permutation
+            final_resized_images = tf.transpose(resized_images_channels_last, (0, 3, 1, 2))
+        elif original_rank == 3:
+            final_resized_images = tf.transpose(resized_images_channels_last, (2, 0, 1))
+            
+    return final_resized_images
+
+
+@tf.custom_gradient
+def _resize_bilinear_with_float16_grad(images_float16_input_channels_last, size_tuple, antialias_bool):
+    """
+    Performs bilinear resize on channels_last float16 input.
+    Forward pass outputs float32 (matching tf.image.resize behavior).
+    Backward pass computes gradient (float32) and casts it to float16.
+    """
+    # tf.image.resize with 'bilinear' always outputs float32.
+    resized_float32_channels_last = tf.image.resize(
+        images_float16_input_channels_last, size_tuple, method="bilinear", antialias=antialias_bool
+    )
+
+    def grad_fn(upstream_gradients_float32_channels_last):
+        # upstream_gradients_float32_channels_last are gradients w.r.t. the float32 output of this op.
+        # tf.raw_ops.ResizeBilinearGrad expects `original_image` (which is images_float16_input_channels_last)
+        # and `grads` (upstream_gradients_float32_channels_last) to be consistent with its operation.
+        grad_output_float32_channels_last = tf.raw_ops.ResizeBilinearGrad(
+            grads=upstream_gradients_float32_channels_last, original_image=images_float16_input_channels_last
+        )
+        
+        # Cast the computed gradient to float16. This is the core fix.
+        grad_output_float16_channels_last = tf.cast(grad_output_float32_channels_last, tf.float16)
+        # Gradients are for: images_float16_input_channels_last, size_tuple, antialias_bool
+        return grad_output_float16_channels_last, None, None 
+
+    return resized_float32_channels_last, grad_fn
+
+
+AFFINE_TRANSFORM_INTERPOLATIONS = (
+    "nearest",
         raise ValueError(
             "Invalid value for argument `interpolation`. Expected of one "
             f"{RESIZE_INTERPOLATIONS}. Received: interpolation={interpolation}"

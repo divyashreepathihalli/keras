@@ -2,10 +2,14 @@
 import numpy as np
 import pytest
 from absl.testing import parameterized
+import tensorflow as tf # Added for tf.errors.InternalError
 
 from keras.src import backend
 from keras.src import layers
 from keras.src import testing
+from keras.src import models # Added for Sequential model
+from keras.src import optimizers # Added for Adam optimizer
+from keras.src import mixed_precision # Added for mixed precision
 
 
 class UpSampling2dTest(testing.TestCase):
@@ -139,3 +143,56 @@ class UpSampling2dTest(testing.TestCase):
         x = np.arange(np.prod(input_shape)).reshape(input_shape)
         for interpolation in ["lanczos3", "lanczos5"]:
             layers.UpSampling2D(size=(1, 2), interpolation=interpolation)(x)
+
+    @pytest.mark.requires_trainable_backend
+    def test_upsampling2d_mixed_precision_bilinear_jit_correctness(self):
+        if backend.backend() != "tensorflow":
+            pytest.skip(
+                "This test is specific to TensorFlow backend due to XLA and "
+                "ResizeBilinearGrad behavior."
+            )
+
+        original_policy = mixed_precision.global_policy()
+        try:
+            mixed_precision.set_global_policy("mixed_float16")
+
+            model = models.Sequential()
+            # Input shape needs to be large enough to not trigger all-zero gradients
+            # which might mask the issue.
+            model.add(layers.Input(shape=[16, 16, 32], dtype="float32"))
+            model.add(layers.Conv2D(filters=4, kernel_size=3, padding="same"))
+            model.add(
+                layers.UpSampling2D(
+                    size=2,
+                    interpolation="bilinear",
+                    name="up_sample_bilinear",
+                )
+            )
+            # Using Conv2D after UpSampling2D as it's a common scenario
+            # and its gradient computation will interact with UpSampling2D's gradient.
+            model.add(layers.Conv2D(filters=4, kernel_size=3, padding="same", activation="relu"))
+            model.add(layers.GlobalAveragePooling2D()) # To reduce output size for Dense
+            model.add(layers.Dense(1, activation="sigmoid"))
+
+
+            model.compile(
+                optimizer=optimizers.Adam(),
+                loss="binary_crossentropy", # Use binary_crossentropy for sigmoid output
+                jit_compile=True,
+            )
+
+            # Dummy data
+            batch_size = 2
+            input_data = np.ones((batch_size, 16, 16, 32), dtype="float32")
+            # Target data for sigmoid output should be between 0 and 1
+            target_data = np.random.randint(0, 2, size=(batch_size, 1)).astype("float32")
+            
+            try:
+                model.fit(input_data, target_data, epochs=1, steps_per_epoch=1)
+            except tf.errors.InternalError as e:
+                self.fail(f"model.fit() raised InternalError with JIT and mixed_float16: {e}")
+            except Exception as e:
+                self.fail(f"model.fit() raised an unexpected exception: {e}")
+
+        finally:
+            mixed_precision.set_global_policy(original_policy)

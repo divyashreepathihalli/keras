@@ -17,6 +17,29 @@ from keras.src.backend.jax.core import Variable as KerasJaxVariable
 from keras.src import testing
 
 
+# Helper class for Test Case 4 (Adapter approach)
+class NNXAdapterModule(nnx.Module):
+    def __init__(self, keras_model_or_layer, rngs=None): # Added optional rngs for nnx.Module compatibility
+        """
+        Initializes the NNXAdapterModule.
+
+        Args:
+            keras_model_or_layer: The Keras Model or Layer instance to be wrapped.
+            rngs: Optional RNGs for nnx.Module, though not used by this adapter directly.
+        """
+        self.keras_model = keras_model_or_layer
+        # If nnx.Module's __init__ requires specific arguments like 'rngs',
+        # they should be passed via super() or handled if this class had its own state.
+        # For a simple wrapper, default nnx.Module init is often sufficient.
+        # super().__init__(rngs=rngs) # Only if nnx.Module.__init__ expects/requires rngs
+
+    def __call__(self, *args, **kwargs):
+        """
+        Delegates the call to the underlying Keras model or layer.
+        """
+        return self.keras_model(*args, **kwargs)
+
+
 @pytest.mark.skipif(
     backend.backend() != "jax",
     reason="JAX backend specific test for core Variable integration with NNX.",
@@ -97,7 +120,7 @@ class JaxCoreVariableTest(testing.TestCase):
             self.fail(f"Assign test failed: {e}")
 
     def test_keras_model_with_nnx_optimizer(self):
-        # Test Case 2: Keras Sequential model with nnx.Optimizer
+        # Test Case 2: Keras Sequential model with nnx.Optimizer, using NNXAdapterModule
 
         # Dummy dataset
         X_train = jnp.arange(100, dtype=jnp.float32).reshape(-1, 1) / 10.0
@@ -108,73 +131,67 @@ class JaxCoreVariableTest(testing.TestCase):
             for i in range(0, num_samples, batch_size):
                 yield X_train[i:i + batch_size], Y_train[i:i + batch_size]
 
-        keras_model = models.Sequential([
-            layers.Dense(32, activation='relu', input_shape=(1,)),
-            layers.Dense(1),
+        keras_model_instance = models.Sequential([
+            layers.Dense(32, activation='relu', input_shape=(1,), name="dense_1"),
+            layers.Dense(1, name="dense_2"),
         ])
 
         dummy_input = jnp.ones((1, 1))
-        _ = keras_model(dummy_input)  # Build the model
-        self.assertTrue(keras_model.built, "Keras model did not build.")
+        _ = keras_model_instance(dummy_input)  # Build the model
+        self.assertTrue(keras_model_instance.built, "Keras model did not build.")
+        self.assertTrue(len(keras_model_instance.trainable_weights) > 0, "Keras model has no trainable weights.")
+
+        # Wrap the Keras model with NNXAdapterModule
+        # NNXAdapterModule is defined in the same file (core_test.py)
+        wrapped_model = NNXAdapterModule(keras_model_instance)
+        # No specific rngs passed to adapter, assuming default nnx.Module init is fine
 
         tx = optax.sgd(1e-3)
-
-        class KerasWrapper(nnx.Module):
-            def __init__(self, model_instance): # Removed rngs as it's not used for pre-built model
-                self.model = model_instance
-
-            def __call__(self, x):
-                return self.model(x)
-
-        wrapped_keras_model = KerasWrapper(keras_model)
-
-        optimizer = nnx.Optimizer(wrapped_keras_model, tx)
-        self.assertIsNotNone(optimizer, "nnx.Optimizer failed to create.")
+        optimizer = nnx.Optimizer(wrapped_model, tx) # Optimizer now uses the wrapped model
+        self.assertIsNotNone(optimizer, "nnx.Optimizer failed to create with wrapped model.")
 
         @nnx.jit
-        def train_step_nnx(module: KerasWrapper, opt_state, batch_data): # opt_state type hint removed for simplicity
+        def train_step_nnx(module_adapter: NNXAdapterModule, opt_state, batch_data):
             x, y = batch_data
-            def loss_fn(mdl_to_train: KerasWrapper):
-                y_pred = mdl_to_train(x)
+            def loss_fn(mdl_adapter: NNXAdapterModule): # Loss function takes the adapter
+                y_pred = mdl_adapter(x) # This calls NNXAdapterModule.__call__ -> keras_model(x)
                 return jnp.mean((y - y_pred) ** 2)
             
-            # Using simplified nnx.grad call as per findings in previous steps
-            grads = nnx.grad(loss_fn)(module)
+            # nnx.grad operates on the adapter. It should find variables in adapter.keras_model
+            grads = nnx.grad(loss_fn, wrt=(nnx.Variable, lambda v: v.trainable))(module_adapter)
             
-            self.assertTrue(len(keras_model.trainable_weights) > 0, "Keras model has no trainable weights.")
-
-            # Check if grads were computed for the Keras model variables.
-            # nnx.grad returns a PyTree (State object) mirroring the module structure.
-            # We need to check if the relevant parts of this PyTree are non-empty.
-            found_grads_for_keras_layers = False
-            if 'model' in grads.variables: # 'model' is the attribute name in KerasWrapper
-                keras_model_grads_state = grads.variables['model'] # This should be a State object for the Keras model
-                
-                # Iterate through layers of the Keras model and check for corresponding grad states
-                for layer in module.model.layers: # Accessing the original Keras model
-                    if layer.name in keras_model_grads_state.variables:
+            # Check if grads are found for the Keras model's variables
+            # Grads PyTree will now have 'keras_model' as a top-level key if variables are found there
+            found_grads = False
+            if 'keras_model' in grads.variables:
+                keras_model_grads_state = grads.variables['keras_model'] # This is a State object
+                # Iterate through layers of the original keras_model_instance
+                for layer in keras_model_instance.layers:
+                    if layer.name in keras_model_grads_state.variables: # Check if layer name is a key in grads
                         layer_grads_state = keras_model_grads_state.variables[layer.name]
-                        # Check if 'kernel' or 'bias' grads exist for this layer
-                        if 'kernel' in layer_grads_state.variables or 'bias' in layer_grads_state.variables:
-                            found_grads_for_keras_layers = True
-                            break 
-            
-            self.assertTrue(found_grads_for_keras_layers, "No gradients were computed for the Keras model's layers.")
+                        if any(var_name in layer_grads_state.variables for var_name in ['kernel', 'bias']):
+                            found_grads = True
+                            break
+                if found_grads:
+                     # Print an example grad norm for debugging if grads are found
+                     grad_leaves = jax.tree_util.tree_leaves(grads)
+                     # print(f"Debug: Example grad leaf norm: {jnp.linalg.norm(grad_leaves[0]) if grad_leaves else 'N/A'}")
+                     pass
 
-            new_opt_state = opt_state.update(grads) # Use update method of optimizer
-            # nnx.Optimizer.update updates the optimizer's internal state and the model's parameters directly.
-            # It returns None. So, the original optimizer instance `opt_state` is the one that's updated.
-            # The module `module` is also updated in-place by the optimizer.
-            return module, opt_state # Return the (potentially updated) module and the optimizer state (which is the optimizer itself)
+
+            self.assertTrue(found_grads, "No gradients were computed for the Keras model's variables via the adapter.")
+
+            new_opt_state = opt_state.update(grads)
+            return module_adapter, new_opt_state
 
         @nnx.jit
-        def test_step_nnx(module: KerasWrapper, batch_data):
+        def test_step_nnx(module_adapter: NNXAdapterModule, batch_data):
             x, y = batch_data
-            y_pred = module(x)
+            y_pred = module_adapter(x) # Calls NNXAdapterModule.__call__
             loss = jnp.mean((y - y_pred) ** 2)
             return {'loss': loss}
 
-        current_optimizer_state = optimizer # Optimizer instance itself is the state for nnx.Optimizer
+        current_opt_state = optimizer # Optimizer instance itself is the initial state
         
         initial_loss = float('inf')
         final_loss = float('inf')
@@ -182,18 +199,20 @@ class JaxCoreVariableTest(testing.TestCase):
         for step, (batch_x, batch_y) in enumerate(dataset()):
             if step >= 5:  # Limit steps for testing
                 break
-            # Pass wrapped_keras_model and the optimizer instance
-            wrapped_keras_model, current_optimizer_state = train_step_nnx(wrapped_keras_model, current_optimizer_state, (batch_x, batch_y))
+            # Pass the wrapped_model to train_step
+            _, current_opt_state = train_step_nnx(wrapped_model, current_opt_state, (batch_x, batch_y))
             if step % 1 == 0:
-                logs = test_step_nnx(wrapped_keras_model, (X_train, Y_train))
-                loss_value = logs['loss']
+                logs = test_step_nnx(wrapped_model, (X_train, Y_train))
+                loss_value = logs['loss'].item()
                 if step == 0:
                     initial_loss = loss_value
                 final_loss = loss_value
+                self.assertTrue(np.isfinite(loss_value), f"Loss became non-finite at step {step}")
         
         self.assertTrue(np.isfinite(initial_loss), "Initial loss is not finite.")
         self.assertTrue(np.isfinite(final_loss), "Final loss is not finite.")
-        self.assertTrue(final_loss <= initial_loss + 1e-1, f"Loss did not decrease or stay stable. Initial: {initial_loss}, Final: {final_loss}")
+        self.assertTrue(final_loss <= initial_loss + 1e-1, f"Loss did not decrease or stay stable. Initial: {initial_loss:.4f}, Final: {final_loss:.4f}")
+        print(f"Test test_keras_model_with_nnx_optimizer passed. Initial loss: {initial_loss:.4f}, Final loss: {final_loss:.4f}")
 
     def test_keras_jax_variable_pickling(self):
         # Test Case 3: Pickling and Unpickling KerasJaxVariable

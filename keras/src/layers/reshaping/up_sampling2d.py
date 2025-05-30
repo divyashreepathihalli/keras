@@ -102,13 +102,16 @@ class UpSampling2D(Layer):
             return (input_shape[0], height, width, input_shape[3])
 
     def call(self, inputs):
-        return self._resize_images(
+        output = self._resize_images(
             inputs,
             self.size[0],
             self.size[1],
             self.data_format,
             interpolation=self.interpolation,
         )
+        if backend.backend == "tensorflow":
+            return ops.cast(output, "float32")
+        return output
 
     def get_config(self):
         config = {

@@ -67,7 +67,12 @@ class UpSampling2D(Layer):
     """
 
     def __init__(
-        self, size=(2, 2), data_format=None, interpolation="nearest", **kwargs
+        self,
+        size=(2, 2),
+        data_format=None,
+        interpolation="nearest",
+        dtype="float32",
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.data_format = backend.standardize_data_format(data_format)
@@ -102,16 +107,13 @@ class UpSampling2D(Layer):
             return (input_shape[0], height, width, input_shape[3])
 
     def call(self, inputs):
-        output = self._resize_images(
+        return self._resize_images(
             inputs,
             self.size[0],
             self.size[1],
             self.data_format,
             interpolation=self.interpolation,
         )
-        if backend.backend == "tensorflow":
-            return ops.cast(output, "float32")
-        return output
 
     def get_config(self):
         config = {

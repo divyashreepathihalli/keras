@@ -53,6 +53,27 @@ class Variable(KerasVariable, nnx.Variable):
         elif "mutable" not in nnx_metadata:
             nnx_metadata["mutable"] = actual_nnx_mutable
 
+        # Define the hook for NNX value updates
+        def _sync_keras_value_on_nnx_update(variable, new_nnx_value):
+            """Updates Keras's _value when NNX's value changes."""
+            if hasattr(variable, '_value'):  # Ensure _value exists
+                variable._value = new_nnx_value
+            return new_nnx_value
+
+        # Add the hook to nnx_metadata, chaining if necessary
+        if "on_set_value" in nnx_metadata:
+            existing_on_set_value = nnx_metadata["on_set_value"]
+            def _chained_sync_hook(variable, new_nnx_value):
+                # Call existing hook
+                processed_value_by_existing_hook = existing_on_set_value(variable, new_nnx_value)
+                # Sync Keras's _value with the result from the existing hook
+                if hasattr(variable, '_value'): # Ensure _value exists
+                    variable._value = processed_value_by_existing_hook
+                return processed_value_by_existing_hook
+            nnx_metadata["on_set_value"] = _chained_sync_hook
+        else:
+            nnx_metadata["on_set_value"] = _sync_keras_value_on_nnx_update
+
         # Initialize nnx.Variable first.
         if shape is not None and dtype is not None:
             # If initializer is a Keras callable, it's not ready yet.

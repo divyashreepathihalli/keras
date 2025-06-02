@@ -1,5 +1,6 @@
 import os
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -48,3 +49,45 @@ class JaxCoreVariableTest(testing.TestCase):
         restored_model = keras.models.load_model(path)
         restored_outputs = restored_model(self.single_dummy_input)
         self.assertAllEqual(original_outputs, restored_outputs)
+
+    def test_keras_variable_nnx_split_merge_sync(self):
+        # 1. Keras backend is set to JAX by the class decorator @pytest.mark.skipif
+        # 2. Necessary imports are jax, jax.numpy as jnp, keras, flax.nnx
+        
+        # 3. Create a Keras JAX variable
+        variable = keras.Variable(jnp.array(1.0), name="test_var")
+
+        # 4. Split the variable using nnx.split()
+        # nnx.split expects a Module, so we wrap the variable in a simple one
+        class SimpleModule(nnx.Module):
+            def __init__(self):
+                self.v = variable
+        
+        module_instance = SimpleModule()
+        graphdef, state = nnx.split(module_instance)
+
+        # 5. Modify the state
+        # The state will be a dict {'v': {'raw_value': array(1., dtype=float32)}}
+        # or similar, depending on NNX internal structure for Keras Variables.
+        # We need to target the actual array value.
+        def update_fn(x):
+            if isinstance(x, jnp.ndarray):
+                return x + 1
+            return x
+        
+        modified_state = jax.tree.map(update_fn, state)
+
+        # 6. Merge the state back
+        # variable2 will be the module instance with updated state
+        module_instance_2 = nnx.merge(graphdef, modified_state)
+        variable2 = module_instance_2.v # Get the variable from the module
+
+        # 7. Assert that variable2 is the same instance as variable
+        self.assertIs(variable2, variable)
+
+        # 8. Assert that the internal _value and the public value property are consistent
+        self.assertEqual(variable2._value, variable2.value)
+
+        # 9. Assert that the value is the updated one
+        self.assertAllClose(variable2.value, jnp.array(2.0))
+        self.assertAllClose(variable._value, jnp.array(2.0)) # Also check original variable's _value

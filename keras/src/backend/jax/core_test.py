@@ -57,30 +57,23 @@ class JaxCoreVariableTest(testing.TestCase):
         # 3. Create a Keras JAX variable
         variable = keras.Variable(jnp.array(1.0), name="test_var")
 
-        # 4. Split the variable using nnx.split()
-        # nnx.split expects a Module, so we wrap the variable in a simple one
-        class SimpleModule(nnx.Module):
-            def __init__(self):
-                self.v = variable
-        
-        module_instance = SimpleModule()
-        graphdef, state = nnx.split(module_instance)
+        # 4. Split the variable directly using nnx.split()
+        graphdef, state = nnx.split(variable)
 
         # 5. Modify the state
-        # The state will be a dict {'v': {'raw_value': array(1., dtype=float32)}}
-        # or similar, depending on NNX internal structure for Keras Variables.
-        # We need to target the actual array value.
+        # When splitting a single nnx.Variable, the state might be the value itself
+        # or a dict like {'value': ..., 'metadata': ...}.
+        # jax.tree.map will traverse this and update any jnp.ndarray leaves.
         def update_fn(x):
-            if isinstance(x, jnp.ndarray):
+            if isinstance(x, jnp.ndarray): # Or jax.Array for more generality
                 return x + 1
             return x
         
         modified_state = jax.tree.map(update_fn, state)
 
         # 6. Merge the state back
-        # variable2 will be the module instance with updated state
-        module_instance_2 = nnx.merge(graphdef, modified_state)
-        variable2 = module_instance_2.v # Get the variable from the module
+        # variable2 should be the same instance as the original variable, updated.
+        variable2 = nnx.merge(graphdef, modified_state)
 
         # 7. Assert that variable2 is the same instance as variable
         self.assertIs(variable2, variable)

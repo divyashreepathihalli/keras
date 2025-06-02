@@ -252,6 +252,27 @@ class Variable(KerasVariable, nnx.Variable):
                     self, current_value
                 )
 
+        # Synchronize Keras's _value with the potentially updated current_value from raw_value
+        if hasattr(self, "_value"):
+            are_different = False
+            # Check if current_value is a JAX array
+            if isinstance(current_value, (jnp.ndarray, jax.Array)):
+                # Check if self._value is not a JAX array, or if shape, dtype, or content differ
+                if not isinstance(self._value, (jnp.ndarray, jax.Array)) or \
+                   self._value.shape != current_value.shape or \
+                   self._value.dtype != current_value.dtype or \
+                   jnp.any(jnp.not_equal(self._value, current_value)): # Use jnp.not_equal for safe comparison
+                    are_different = True
+            # Handle non-array types or cases where direct comparison is sufficient
+            # (This might also catch JAX arrays if the above conditions weren't met,
+            #  but the specific JAX array checks are preferred for robustness)
+            elif self._value != current_value:
+                are_different = True
+            
+            if are_different:
+                self._value = current_value
+
+
         if in_stateless_scope():
             scope = get_stateless_scope()
             stateless_value = scope.get_current_value(self)

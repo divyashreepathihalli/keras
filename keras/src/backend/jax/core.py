@@ -53,26 +53,10 @@ class Variable(KerasVariable, nnx.Variable):
         elif "mutable" not in nnx_metadata:
             nnx_metadata["mutable"] = actual_nnx_mutable
 
-        # Define the hook for NNX value updates
-        def _sync_keras_value_on_nnx_update(variable, new_nnx_value):
-            """Updates Keras's _value when NNX's value changes."""
-            if hasattr(variable, '_value'):  # Ensure _value exists
-                variable._value = new_nnx_value
-            return new_nnx_value
-
-        # Add the hook to nnx_metadata, chaining if necessary
-        if "on_set_value" in nnx_metadata:
-            existing_on_set_value = nnx_metadata["on_set_value"]
-            def _chained_sync_hook(variable, new_nnx_value):
-                # Call existing hook
-                processed_value_by_existing_hook = existing_on_set_value(variable, new_nnx_value)
-                # Sync Keras's _value with the result from the existing hook
-                if hasattr(variable, '_value'): # Ensure _value exists
-                    variable._value = processed_value_by_existing_hook
-                return processed_value_by_existing_hook
-            nnx_metadata["on_set_value"] = _chained_sync_hook
-        else:
-            nnx_metadata["on_set_value"] = _sync_keras_value_on_nnx_update
+        # NOTE: The _sync_keras_value_on_nnx_update hook and its chaining logic
+        # have been removed as _value is now a property directly reflecting raw_value.
+        # User-provided "on_set_value" hooks will still work as intended if present
+        # in nnx_metadata, but they should not attempt to synchronize _value themselves.
 
         # Initialize nnx.Variable first.
         if shape is not None and dtype is not None:
@@ -108,9 +92,26 @@ class Variable(KerasVariable, nnx.Variable):
             name=name,
         )
 
-        # self._value now holds the true JAX array from KerasVariable init.
-        # Update nnx.Variable's internal value (raw_value) to match.
-        object.__setattr__(self, "raw_value", self._value)
+        # NOTE: The final object.__setattr__(self, "raw_value", self._value)
+        # has been removed. KerasVariable.__init__ assigns to self._value,
+        # which, now being a property, will call its setter. The setter calls
+        # _direct_assign, which updates self.raw_value. So raw_value is
+        # updated through this property mechanism during initialization.
+
+    @property
+    def _value(self):
+        # getattr is used for safety during early __init__ phases or if raw_value
+        # might not be present for some other reason (e.g. during unpickling before state is set).
+        # In typical post-init operation, raw_value should exist.
+        if hasattr(self, "raw_value"):
+            return self.raw_value
+        return None # Should ideally not be hit often post-init.
+
+    @_value.setter
+    def _value(self, new_keras_value):
+        # All Keras-initiated writes to _value (which KerasVariable common code does)
+        # are rerouted to _direct_assign to update raw_value (NNX's state).
+        self._direct_assign(new_keras_value)
 
     def __getstate__(self):
         # Get the state from KerasVariable (attributes in __dict__)
@@ -196,8 +197,11 @@ class Variable(KerasVariable, nnx.Variable):
         else:
             processed_value = value
 
-        # Update Keras's internal _value
-        self._value = processed_value
+        # Update Keras's internal _value - REMOVED
+        # self._value = processed_value 
+        # _value is now a property; raw_value is the source of truth.
+        # KerasVariable common code writing to self._value will hit the property setter,
+        # which calls this _direct_assign method. This method's job is to update raw_value.
 
         # Ensure that nnx.Variable part is initialized
         if not hasattr(self, "_var_metadata"):
@@ -239,11 +243,12 @@ class Variable(KerasVariable, nnx.Variable):
                         "Variable is not properly initialized and has no "
                         "initializer."
                     )
-            current_value = self._value
+            # This means raw_value (NNX part) is not yet initialized or accessible.
+            # The _value property getter handles this by returning None via getattr(self, "raw_value", None).
+            current_value = self._value # Invokes _value.getter
         else:
-            current_value = self.raw_value
-            # NNX specific: if raw_value is a mutable_array wrapper, get the
-            # actual array.
+            current_value = self.raw_value # Directly access raw_value as the source of truth
+            # NNX specific: if raw_value is a mutable_array wrapper, get the actual array.
             if (
                 hasattr(self, "_var_metadata")
                 and "on_get_value" in self._var_metadata
@@ -252,26 +257,8 @@ class Variable(KerasVariable, nnx.Variable):
                     self, current_value
                 )
 
-        # Synchronize Keras's _value with the potentially updated current_value from raw_value
-        if hasattr(self, "_value"):
-            are_different = False
-            # Check if current_value is a JAX array
-            if isinstance(current_value, (jnp.ndarray, jax.Array)):
-                # Check if self._value is not a JAX array, or if shape, dtype, or content differ
-                if not isinstance(self._value, (jnp.ndarray, jax.Array)) or \
-                   self._value.shape != current_value.shape or \
-                   self._value.dtype != current_value.dtype or \
-                   jnp.any(jnp.not_equal(self._value, current_value)): # Use jnp.not_equal for safe comparison
-                    are_different = True
-            # Handle non-array types or cases where direct comparison is sufficient
-            # (This might also catch JAX arrays if the above conditions weren't met,
-            #  but the specific JAX array checks are preferred for robustness)
-            elif self._value != current_value:
-                are_different = True
-            
-            if are_different:
-                self._value = current_value
-
+        # Explicit synchronization logic previously here IS REMOVED because
+        # _value property now directly reflects raw_value.
 
         if in_stateless_scope():
             scope = get_stateless_scope()

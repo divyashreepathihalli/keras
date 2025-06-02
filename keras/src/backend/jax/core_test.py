@@ -75,12 +75,16 @@ class JaxCoreVariableTest(testing.TestCase):
         # variable2 should be the same instance as the original variable, updated.
         variable2 = nnx.merge(graphdef, modified_state)
 
-        # 7. Assert that variable2 is the same instance as variable
+        # 7. Assert that variable2 is the same instance as variable (critical check first)
         self.assertIs(variable2, variable)
 
-        # 8. Assert that the internal _value and the public value property are consistent
-        self.assertEqual(variable2._value, variable2.value)
+        # Assert that variable2._value is immediately updated after merge and before other accesses.
+        # variable2._value now calls the property getter which reads raw_value.
+        self.assertAllClose(variable2._value, jnp.array(2.0), msg="variable2._value should be immediately updated after merge")
 
-        # 9. Assert that the value is the updated one
-        self.assertAllClose(variable2.value, jnp.array(2.0))
-        self.assertAllClose(variable._value, jnp.array(2.0)) # Also check original variable's _value
+        # 8. Assert that the internal _value (property) and the public value property are consistent
+        self.assertEqual(variable2._value, variable2.value, msg="_value and .value should be consistent")
+
+        # 9. Assert that the public value property reflects the update
+        self.assertAllClose(variable2.value, jnp.array(2.0), msg="variable2.value should reflect the update")
+        # self.assertAllClose(variable._value, jnp.array(2.0)) # This is redundant due to assertIs and the immediate check above.

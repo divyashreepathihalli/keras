@@ -346,6 +346,83 @@ class QuantizersTest(testing.TestCase):
                 "expected_steps": [1.0, 0.5, 0.5, 0.5],
                 "axis": 1,
             },
+            # Tests for num_bits = 4
+            {
+                "testcase_name": "wide_4bits_input_mins_-8.0_input_maxs_7.0", # Maps to [0,15] grid, scale 1.0
+                "narrow_range": False,
+                "input_mins": [-8.0],
+                "input_maxs": [7.0],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [-8.0],
+                "expected_nudged_input_maxs": [7.0],
+                "expected_steps": [1.0],
+                "axis": None,
+            },
+            {
+                "testcase_name": "narrow_4bits_input_mins_-7.0_input_maxs_7.0", # Maps to [1,15] grid, scale 1.0
+                "narrow_range": True,
+                "input_mins": [-7.0],
+                "input_maxs": [7.0],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [-7.0],
+                "expected_nudged_input_maxs": [7.0],
+                "expected_steps": [1.0],
+                "axis": None,
+            },
+            {
+                "testcase_name": "wide_4bits_nudged_input_mins_-4.05_input_maxs_3.55", # Approx [-4, 3.5]
+                "narrow_range": False, # Grid [0,15]
+                "input_mins": [-4.05], # min_range
+                "input_maxs": [3.55],  # max_range
+                "num_bits": 4,
+                # diff_range = 3.55 - (-4.05) = 7.6
+                # scale = 7.6 / 15 = 0.506666...
+                # zp = 0 - (-4.05 / scale) = 4.05 * 15 / 7.6 = 60.75 / 7.6 = 7.99342... -> nudged_zp = 8
+                # nudged_min = (0 - 8) * scale = -8 * 7.6 / 15 = -60.8 / 15 = -4.053333...
+                # nudged_max = (15 - 8) * scale = 7 * 7.6 / 15 = 53.2 / 15 = 3.546666...
+                "expected_nudged_input_mins": [-60.8 / 15], # -4.053333...
+                "expected_nudged_input_maxs": [53.2 / 15],  #  3.546666...
+                "expected_steps": [7.6 / 15], # 0.506666...
+                "axis": None,
+            },
+            {
+                "testcase_name": "narrow_4bits_nudged_input_mins_-3.6_input_maxs_3.6", # Approx [-3.5, 3.5]
+                "narrow_range": True, # Grid [1,15]
+                "input_mins": [-3.6], # min_range
+                "input_maxs": [3.6],  # max_range
+                "num_bits": 4,
+                # diff_range = 3.6 - (-3.6) = 7.2
+                # scale = 7.2 / 14 = 0.5142857...
+                # zp = 1 - (-3.6 / scale) = 1 + 3.6*14/7.2 = 1 + 0.5*14 = 1+7 = 8
+                # nudged_min = (1 - 8) * scale = -7 * 7.2 / 14 = -7 * 0.5142857... = -3.6
+                # nudged_max = (15 - 8) * scale = 7 * 7.2 / 14 = 3.6
+                "expected_nudged_input_mins": [-3.6],
+                "expected_nudged_input_maxs": [3.6],
+                "expected_steps": [7.2 / 14], # 0.5142857...
+                "axis": None,
+            },
+            {
+                "testcase_name": "wide_4bits_multi_channel",
+                "narrow_range": False,
+                "input_mins": [-8.0, -4.05],
+                "input_maxs": [7.0, 3.55],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [-8.0, -60.8/15],
+                "expected_nudged_input_maxs": [7.0, 53.2/15],
+                "expected_steps": [1.0, 7.6/15],
+                "axis": 1,
+            },
+            {
+                "testcase_name": "narrow_4bits_multi_channel",
+                "narrow_range": True,
+                "input_mins": [-7.0, -3.6],
+                "input_maxs": [7.0, 3.6],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [-7.0, -3.6],
+                "expected_nudged_input_maxs": [7.0, 3.6],
+                "expected_steps": [1.0, 7.2/14],
+                "axis": 1,
+            },
         ]
     )
     @pytest.mark.skipif(

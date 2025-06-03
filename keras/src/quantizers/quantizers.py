@@ -232,6 +232,12 @@ def fake_quant_with_min_max_vars(
     max_vals = ops.convert_to_tensor(max_vals)
     num_bits = int(num_bits)
 
+    if not (2 <= num_bits <= 16):
+        raise ValueError(
+            "num_bits must be between 2 and 16, inclusive. "
+            f"Received: num_bits={num_bits}"
+        )
+
     if axis is not None:
         axis = canonicalize_axis(axis, inputs.ndim)
 

@@ -2,6 +2,7 @@ import inspect
 
 from keras.src.api_export import keras_export
 from keras.src.quantizers.quantizers import AbsMaxQuantizer
+from keras.src.quantizers.quantizers import Int4AbsMaxQuantizer
 from keras.src.quantizers.quantizers import Quantizer
 from keras.src.quantizers.quantizers import abs_max_quantize
 from keras.src.quantizers.quantizers import compute_float8_amax_history
@@ -11,7 +12,7 @@ from keras.src.quantizers.quantizers import quantize_and_dequantize
 from keras.src.saving import serialization_lib
 from keras.src.utils.naming import to_snake_case
 
-ALL_OBJECTS = {Quantizer, AbsMaxQuantizer}
+ALL_OBJECTS = {Quantizer, AbsMaxQuantizer, Int4AbsMaxQuantizer}
 ALL_OBJECTS_DICT = {cls.__name__: cls for cls in ALL_OBJECTS}
 ALL_OBJECTS_DICT.update(
     {to_snake_case(cls.__name__): cls for cls in ALL_OBJECTS}

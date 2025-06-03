@@ -56,6 +56,64 @@ class QuantizersTest(testing.TestCase):
         self.assertDType(quantized_values, "int8")
         self.assertDType(scale, "float16")
 
+    def test_int4_abs_max_quantizer(self):
+        values = random.uniform([3, 4, 5], minval=-1, maxval=1, dtype="float32")
+        # Test with a single axis
+        quantizer_single_axis = quantizers.Int4AbsMaxQuantizer(axis=-1)
+
+        # Test quantizing
+        quantized_values, scale = quantizer_single_axis(values)
+        self.assertDType(quantized_values, "int8") # Internal representation
+        self.assertDType(scale, "float32")
+        self.assertEqual(tuple(quantized_values.shape), (3, 4, 5))
+        self.assertEqual(tuple(scale.shape), (3, 4, 1))
+        # Check if values are within int4 range
+        self.assertLessEqual(ops.max(quantized_values), 7)
+        self.assertGreaterEqual(ops.min(quantized_values), -7)
+
+        # Test dequantizing
+        dequantized_values = ops.divide(quantized_values, scale)
+        # Int4 will have higher error than Int8, adjust tolerance if needed
+        rmse = ops.sqrt(
+            ops.mean(ops.square(ops.subtract(values, dequantized_values)))
+        )
+        # This tolerance might need adjustment based on typical int4 performance.
+        # Let's start with a slightly higher tolerance than int8's 1e-1.
+        self.assertLess(rmse, 0.2)
+
+        # Test serialization
+        self.run_class_serialization_test(quantizer_single_axis)
+
+        # Test with multiple axes
+        quantizer_multi_axis = quantizers.Int4AbsMaxQuantizer(axis=(1,2))
+        quantized_values_multi, scale_multi = quantizer_multi_axis(values)
+        self.assertDType(quantized_values_multi, "int8")
+        self.assertEqual(tuple(scale_multi.shape), (3, 1, 1))
+        self.assertLessEqual(ops.max(quantized_values_multi), 7)
+        self.assertGreaterEqual(ops.min(quantized_values_multi), -7)
+        self.run_class_serialization_test(quantizer_multi_axis)
+
+
+        # Test bfloat16 dtype
+        values_bf16 = random.uniform(
+            [3, 4, 5], minval=-1, maxval=1, dtype="bfloat16"
+        )
+        quantized_values_bf16, scale_bf16 = quantizer_single_axis(values_bf16)
+        self.assertDType(quantized_values_bf16, "int8")
+        self.assertDType(scale_bf16, "bfloat16")
+        self.assertLessEqual(ops.max(quantized_values_bf16), 7)
+        self.assertGreaterEqual(ops.min(quantized_values_bf16), -7)
+
+        # Test float16 dtype
+        values_f16 = random.uniform(
+            [3, 4, 5], minval=-1, maxval=1, dtype="float16"
+        )
+        quantized_values_f16, scale_f16 = quantizer_single_axis(values_f16)
+        self.assertDType(quantized_values_f16, "int8")
+        self.assertDType(scale_f16, "float16")
+        self.assertLessEqual(ops.max(quantized_values_f16), 7)
+        self.assertGreaterEqual(ops.min(quantized_values_f16), -7)
+
     def test_abs_max_quantizer_to_numpy(self):
         values = random.uniform([3, 4, 5], minval=-1, maxval=1, dtype="float32")
         quantized_values, scale = quantizers.abs_max_quantize(
@@ -344,6 +402,39 @@ class QuantizersTest(testing.TestCase):
                 "expected_nudged_input_mins": [0.0, 0.0, -63.0, 0.0],
                 "expected_nudged_input_maxs": [126.0, 63.0, 0.0, 63.0],
                 "expected_steps": [1.0, 0.5, 0.5, 0.5],
+                "axis": 1,
+            },
+            {
+                "testcase_name": "wide_4bits_input_mins_0.0_input_maxs_15.0",
+                "narrow_range": False,
+                "input_mins": [0.0],
+                "input_maxs": [15.0],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [0.0],
+                "expected_nudged_input_maxs": [15.0],
+                "expected_steps": [1.0],
+                "axis": None,
+            },
+            {
+                "testcase_name": "narrow_4bits_input_mins_0.0_input_maxs_14.0",
+                "narrow_range": True,
+                "input_mins": [0.0],
+                "input_maxs": [14.0],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [0.0],
+                "expected_nudged_input_maxs": [14.0],
+                "expected_steps": [1.0],
+                "axis": None,
+            },
+            {
+                "testcase_name": "wide_4bits_multi_channel",
+                "narrow_range": False,
+                "input_mins": [0.0, -8.0],
+                "input_maxs": [7.5, -0.5],
+                "num_bits": 4,
+                "expected_nudged_input_mins": [0.0, -7.5],
+                "expected_nudged_input_maxs": [7.5, 0.0],
+                "expected_steps": [0.5, 0.5],
                 "axis": 1,
             },
         ]

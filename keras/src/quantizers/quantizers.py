@@ -131,6 +131,42 @@ class AbsMaxQuantizer(Quantizer):
         }
 
 
+@keras_export("keras.quantizers.Int4AbsMaxQuantizer")
+class Int4AbsMaxQuantizer(Quantizer):
+    def __init__(
+        self,
+        axis,
+        epsilon=backend.epsilon(),
+    ):
+        super().__init__(output_dtype="int8")  # Internal dtype is int8
+        if isinstance(axis, int):
+            axis = (axis,)
+        self.axis = tuple(axis)
+        # For int4, the value range is typically -8 to 7 or -7 to 7.
+        # Using (-7, 7) for symmetric quantization.
+        self.value_range = (-7, 7)
+        self.epsilon = epsilon
+
+    def __call__(self, x):
+        # Even though output_dtype of quantizer is 'int8',
+        # abs_max_quantize will clip to self.value_range, effectively making it int4.
+        quantized_x, scale = abs_max_quantize(
+            x, self.axis, self.value_range, self.output_dtype, self.epsilon
+        )
+        return quantized_x, scale
+
+    def get_config(self):
+        return {
+            "axis": self.axis,
+            "epsilon": self.epsilon,
+            # value_range and output_dtype are fixed for Int4AbsMaxQuantizer
+            # so they are not strictly needed in config if reconstructed by this class.
+            # However, including them for clarity or if base class uses them.
+            "value_range": self.value_range,
+            "output_dtype": self.output_dtype,
+        }
+
+
 def adjust_and_nudge(min_range, max_range, num_bits, narrow_range):
     """Adjusts and nudges the quantization range for better accuracy."""
     # Use higher precision for the computation.

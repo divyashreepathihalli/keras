@@ -246,21 +246,43 @@ class BaseConv(Layer):
             data_format=self.data_format,
         )
 
-    def call(self, inputs):
-        outputs = self.convolution_op(
+    def convolution_and_activation_op(
+        self, inputs, kernel, bias, activation_fn
+    ):
+        return ops.conv_and_activation(
             inputs,
-            self.kernel,
+            kernel,
+            strides=list(self.strides),
+            padding=self.padding,
+            dilation_rate=self.dilation_rate,
+            data_format=self.data_format,
+            bias=bias,
+            activation_fn=activation_fn,
         )
+
+    def call(self, inputs):
+        bias_value = None
         if self.use_bias:
             if self.data_format == "channels_last":
                 bias_shape = (1,) * (self.rank + 1) + (self.filters,)
             else:
                 bias_shape = (1, self.filters) + (1,) * self.rank
-            bias = ops.reshape(self.bias, bias_shape)
-            outputs = ops.add(outputs, bias)
+            bias_value = ops.reshape(self.bias, bias_shape)
 
         if self.activation is not None:
-            return self.activation(outputs)
+            outputs = self.convolution_and_activation_op(
+                inputs,
+                self.kernel,
+                bias_value,
+                self.activation,
+            )
+        else:
+            outputs = self.convolution_op(
+                inputs,
+                self.kernel,
+            )
+            if self.use_bias:
+                outputs = ops.add(outputs, bias_value)
         return outputs
 
     def compute_output_shape(self, input_shape):

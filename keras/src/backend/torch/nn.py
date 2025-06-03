@@ -584,6 +584,129 @@ def separable_conv(
     )
 
 
+def conv_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    strides=1,
+    padding="valid",
+    data_format=None,
+    dilation_rate=1,
+    activation_fn=None,
+):
+    inputs = convert_to_tensor(inputs)
+    kernel = convert_to_tensor(kernel)
+    if bias is not None:
+        bias = convert_to_tensor(bias)
+
+    num_spatial_dims = inputs.ndim - 2
+    strides = standardize_tuple(strides, num_spatial_dims, "strides")
+    dilation_rate_tuple = standardize_tuple(dilation_rate, num_spatial_dims, "dilation_rate")
+
+
+    original_data_format = backend.standardize_data_format(data_format)
+    if original_data_format == "channels_last":
+        inputs = _transpose_spatial_inputs(inputs)
+
+    # Transpose kernel from Keras format (spatial_dims, in_c, out_c)
+    # to PyTorch format (out_c, in_c, spatial_dims)
+    kernel = _transpose_conv_kernel(kernel)
+
+    in_channels = inputs.shape[1] # This is total input channels
+    # kernel.shape[1] is in_channels_per_group for PyTorch
+    # e.g. (out_channels, in_channels // groups, kH, kW)
+    kernel_in_channels_per_group = kernel.shape[1]
+
+    if grupos > 1 and kernel_in_channels_per_group != 1: # Standard conv vs depthwise
+         # This block seems to be based on a misunderstanding.
+         # For grouped convolutions, kernel.shape[1] is already in_channels / groups.
+         # For depthwise, kernel.shape[1] is 1, and groups = in_channels.
+         pass
+
+    # Corrected group calculation, similar to existing conv op
+    if in_channels % kernel_in_channels_per_group != 0 and kernel_in_channels_per_group != 1 : # kernel_in_channels_per_group is 1 for Depthwise
+        # For regular conv, groups = 1, kernel_in_channels_per_group = in_channels
+        # For group conv, kernel_in_channels_per_group = in_channels / groups
+        # For depthwise conv, kernel_in_channels_per_group = 1, groups = in_channels
+         raise ValueError(
+             f"Input channels ({in_channels}) must be divisible by "
+             f"kernel's input channels per group ({kernel_in_channels_per_group})."
+         )
+
+    if kernel_in_channels_per_group == 1: # Depthwise convolution
+        groups = in_channels
+    elif kernel.shape[0] % groups == 0 and inputs.shape[1] % groups == 0: # Grouped conv
+        # This case might be complex if groups is not pre-determined.
+        # Assuming groups is derived if not depthwise.
+        # The standard conv op uses:
+        groups = in_channels // kernel_in_channels_per_group
+    else: # Standard convolution
+        groups = 1
+
+
+    torch_padding = padding
+    if padding == "same":
+        inputs, torch_padding = _apply_same_padding(
+            inputs,
+            kernel.shape[2:],  # Spatial dimensions of the kernel
+            strides,
+            "channels_first",  # Data format is channels_first at this point
+            "conv",
+            dilation_rate_tuple,
+        )
+    elif padding == "valid":
+        torch_padding = 0
+    else:
+        # PyTorch conv functions expect integer or tuple for padding
+        if isinstance(padding, str):
+             raise ValueError(f"Invalid padding: {padding}")
+
+
+    if num_spatial_dims == 1:
+        outputs = tnn.conv1d(
+            inputs,
+            kernel,
+            bias=bias,
+            stride=strides,
+            padding=torch_padding,
+            dilation=dilation_rate_tuple,
+            groups=groups,
+        )
+    elif num_spatial_dims == 2:
+        outputs = tnn.conv2d(
+            inputs,
+            kernel,
+            bias=bias,
+            stride=strides,
+            padding=torch_padding,
+            dilation=dilation_rate_tuple,
+            groups=groups,
+        )
+    elif num_spatial_dims == 3:
+        outputs = tnn.conv3d(
+            inputs,
+            kernel,
+            bias=bias,
+            stride=strides,
+            padding=torch_padding,
+            dilation=dilation_rate_tuple,
+            groups=groups,
+        )
+    else:
+        raise ValueError(
+            "Inputs to conv_and_activation operation should have ndim=3, 4, or 5,"
+            "corresponding to 1D, 2D and 3D inputs. Received input "
+            f"shape: {inputs.shape}."
+        )
+
+    if activation_fn is not None:
+        outputs = activation_fn(outputs)
+
+    if original_data_format == "channels_last":
+        outputs = _transpose_spatial_outputs(outputs)
+    return outputs
+
+
 def conv_transpose(
     inputs,
     kernel,
@@ -1088,3 +1211,21 @@ def dot_product_attention(
             scale=scale,
         )
     return torch.transpose(attention_output, axis1, axis0)
+
+
+def matmul_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    activation_fn=None,
+):
+    inputs = convert_to_tensor(inputs)
+    kernel = convert_to_tensor(kernel)
+
+    x = torch.matmul(inputs, kernel)
+    if bias is not None:
+        bias = convert_to_tensor(bias, dtype=x.dtype)
+        x = x + bias
+    if activation_fn is not None:
+        x = activation_fn(x)
+    return x

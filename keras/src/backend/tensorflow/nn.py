@@ -1035,6 +1035,39 @@ def _dot_product_attention_xla(query, key, value, bias, mask, is_causal, scale):
     return tf.einsum("BNTS,BSNH->BTNH", probs, value, optimize="optimal")
 
 
+def conv_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    strides=1,
+    padding="valid",
+    data_format=None,
+    dilation_rate=1,
+    activation_fn=None,
+):
+    tf_data_format = _convert_data_format(data_format, len(inputs.shape))
+
+    # Perform convolution
+    outputs = tf.nn.convolution(
+        inputs,
+        kernel,
+        strides,
+        padding.upper(),
+        data_format=tf_data_format,
+        dilations=dilation_rate,
+    )
+
+    # Add bias if provided
+    if bias is not None:
+        outputs = tf.nn.bias_add(outputs, bias, data_format=tf_data_format)
+
+    # Apply activation if provided
+    if activation_fn is not None:
+        outputs = activation_fn(outputs)
+
+    return outputs
+
+
 def dot_product_attention(
     query,
     key,
@@ -1070,3 +1103,17 @@ def dot_product_attention(
     return _dot_product_attention_xla(
         query, key, value, bias, mask, is_causal, scale
     )
+
+
+def matmul_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    activation_fn=None,
+):
+    x = tf.linalg.matmul(inputs, kernel)
+    if bias is not None:
+        x = x + bias  # Standard element-wise addition for bias
+    if activation_fn is not None:
+        x = activation_fn(x)
+    return x

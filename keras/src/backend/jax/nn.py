@@ -485,6 +485,77 @@ def conv_transpose(
     )
 
 
+def conv_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    strides=1,
+    padding="valid",
+    data_format=None,
+    dilation_rate=1,
+    activation_fn=None,
+):
+    data_format = backend.standardize_data_format(data_format)
+    num_spatial_dims = inputs.ndim - 2
+    dimension_numbers = _convert_to_lax_conv_dimension_numbers(
+        num_spatial_dims,
+        data_format,
+        transpose=False,
+    )
+    strides = _convert_to_spatial_operand(
+        strides,
+        num_spatial_dims,
+        data_format,
+        include_batch_and_channels=False,
+    )
+    dilation_rate = _convert_to_spatial_operand(
+        dilation_rate,
+        num_spatial_dims,
+        data_format,
+        include_batch_and_channels=False,
+    )
+    if data_format == "channels_last":
+        channels = inputs.shape[-1]
+    else:
+        channels = inputs.shape[1]
+    kernel_in_channels = kernel.shape[-2]
+    if channels % kernel_in_channels > 0:
+        raise ValueError(
+            "The number of input channels must be evenly divisible by "
+            f"kernel's in_channels. Received input channels {channels} and "
+            f"kernel in_channels {kernel_in_channels}. "
+        )
+    feature_group_count = channels // kernel_in_channels
+    kernel = convert_to_tensor(kernel)
+    inputs = convert_to_tensor(inputs, dtype=kernel.dtype)
+
+    outputs = jax.lax.conv_general_dilated(
+        inputs,
+        kernel,
+        strides,
+        padding,
+        rhs_dilation=dilation_rate,
+        dimension_numbers=dimension_numbers,
+        feature_group_count=feature_group_count,
+    )
+
+    if bias is not None:
+        bias = convert_to_tensor(bias, dtype=outputs.dtype)
+        if data_format == "channels_first":
+            # JAX bias_add expects bias to have shape (1, C, 1, ..., 1)
+            bias_shape = (1, bias.shape[0]) + (1,) * num_spatial_dims
+        else:
+            # JAX bias_add expects bias to have shape (1, 1, ..., 1, C)
+            bias_shape = (1,) * num_spatial_dims + (1, bias.shape[0])
+        bias = jnp.reshape(bias, bias_shape)
+        outputs = outputs + bias # JAX typically uses broadcasting for bias
+
+    if activation_fn is not None:
+        outputs = activation_fn(outputs)
+
+    return outputs
+
+
 def one_hot(x, num_classes, axis=-1, dtype=None, sparse=False):
     x = convert_to_tensor(x)
     if sparse:
@@ -1256,3 +1327,21 @@ def dot_product_attention(
     )
     encoded = vmapped_fn(query, key, value, bias, mask, is_causal, scale)
     return jnp.reshape(encoded, output_shape)
+
+
+def matmul_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    activation_fn=None,
+):
+    inputs = convert_to_tensor(inputs)
+    kernel = convert_to_tensor(kernel)
+
+    x = jnp.matmul(inputs, kernel)
+    if bias is not None:
+        bias = convert_to_tensor(bias, dtype=x.dtype)
+        x = x + bias
+    if activation_fn is not None:
+        x = activation_fn(x)
+    return x

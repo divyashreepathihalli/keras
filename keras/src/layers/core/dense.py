@@ -148,11 +148,16 @@ class Dense(Layer):
         return self._kernel
 
     def call(self, inputs, training=None):
-        x = ops.matmul(inputs, self.kernel)
-        if self.bias is not None:
-            x = ops.add(x, self.bias)
         if self.activation is not None:
-            x = self.activation(x)
+            x = ops.matmul_and_activation(
+                inputs, self.kernel, self.bias, self.activation
+            )
+        else:
+            x = ops.matmul(inputs, self.kernel)
+            # The new ops.matmul_and_activation handles bias internally.
+            # For the non-fused path, we must ensure bias is added if needed.
+            if self.use_bias and self.bias is not None:
+                x = ops.add(x, self.bias)
         return x
 
     def compute_output_shape(self, input_shape):

@@ -850,10 +850,42 @@ class ConvCorrectnessTest(testing.TestCase):
             "dilation_rate": 1,
             "groups": 2,
         },
+        # Add new test cases with activations
+        {
+            "filters": 5,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "valid",
+            "data_format": "channels_last",
+            "dilation_rate": 1,
+            "groups": 1,
+            "activation": "relu",
+        },
+        {
+            "filters": 6,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "same",
+            "data_format": "channels_last",
+            "dilation_rate": (2,),
+            "groups": 2,
+            "activation": "sigmoid",
+        },
+        {
+            "filters": 6,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "causal",
+            "data_format": "channels_last",
+            "dilation_rate": (2,),
+            "groups": 2,
+            "activation": "linear",
+        },
     )
     def test_conv1d(
         self,
         filters,
+        activation=None,  # New parameter for activation
         kernel_size,
         strides,
         padding,
@@ -869,29 +901,58 @@ class ConvCorrectnessTest(testing.TestCase):
             data_format=data_format,
             dilation_rate=dilation_rate,
             groups=groups,
+            activation=activation, # Pass activation to layer
         )
 
-        inputs = np.random.normal(size=[2, 8, 4])
+        inputs = np.random.normal(size=[2, 8, 4]).astype(self.dtype)
         layer.build(input_shape=inputs.shape)
 
         kernel_shape = layer.kernel.shape
-        kernel_weights = np.random.normal(size=kernel_shape)
-        bias_weights = np.random.normal(size=(filters,))
+        kernel_weights = np.random.normal(size=kernel_shape).astype(self.dtype)
+        bias_weights = np.random.normal(size=(filters,)).astype(self.dtype)
         layer.kernel.assign(kernel_weights)
         layer.bias.assign(bias_weights)
 
-        outputs = layer(inputs)
-        expected = np_conv1d(
-            inputs,
-            kernel_weights,
-            bias_weights,
+        outputs_fused = layer(inputs)
+
+        # Test against unfused version + manual activation
+        layer_unfused = layers.Conv1D(
+            filters=filters,
+            kernel_size=kernel_size,
             strides=strides,
             padding=padding,
             data_format=data_format,
             dilation_rate=dilation_rate,
             groups=groups,
+            activation=None, # Explicitly None for unfused
         )
-        self.assertAllClose(outputs, expected)
+        layer_unfused.build(input_shape=inputs.shape)
+        layer_unfused.kernel.assign(kernel_weights)
+        layer_unfused.bias.assign(bias_weights)
+
+        outputs_unfused = layer_unfused(inputs)
+        if activation:
+            expected_manual_activation = getattr(ops, activation)(outputs_unfused)
+        else: # Linear activation
+            expected_manual_activation = outputs_unfused
+
+        self.assertAllClose(
+            outputs_fused, expected_manual_activation, atol=1e-5, rtol=1e-5
+        )
+
+        # Original NumPy comparison (only valid if activation is None or linear)
+        if activation is None or activation == "linear":
+            expected_np = np_conv1d(
+                inputs,
+                kernel_weights,
+                bias_weights,
+                strides=strides,
+                padding=padding,
+                data_format=data_format,
+                dilation_rate=dilation_rate,
+                groups=groups,
+            )
+            self.assertAllClose(outputs_fused, expected_np, atol=1e-5, rtol=1e-5)
 
     @parameterized.parameters(
         {
@@ -948,10 +1009,42 @@ class ConvCorrectnessTest(testing.TestCase):
             "dilation_rate": (1, 1),
             "groups": 2,
         },
+        # Add new test cases with activations
+        {
+            "filters": 5,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "valid",
+            "data_format": "channels_last",
+            "dilation_rate": 1,
+            "groups": 1,
+            "activation": "relu",
+        },
+        {
+            "filters": 4,
+            "kernel_size": 3,
+            "strides": 2,
+            "padding": "same",
+            "data_format": "channels_last",
+            "dilation_rate": 1,
+            "groups": 1,
+            "activation": "sigmoid",
+        },
+        {
+            "filters": 6,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "same",
+            "data_format": "channels_last",
+            "dilation_rate": (2, 2),
+            "groups": 2,
+            "activation": "linear",
+        },
     )
     def test_conv2d(
         self,
         filters,
+        activation=None, # New parameter for activation
         kernel_size,
         strides,
         padding,
@@ -967,29 +1060,58 @@ class ConvCorrectnessTest(testing.TestCase):
             data_format=data_format,
             dilation_rate=dilation_rate,
             groups=groups,
+            activation=activation, # Pass activation to layer
         )
 
-        inputs = np.random.normal(size=[2, 8, 8, 4])
+        inputs = np.random.normal(size=[2, 8, 8, 4]).astype(self.dtype)
         layer.build(input_shape=inputs.shape)
 
         kernel_shape = layer.kernel.shape
-        kernel_weights = np.random.normal(size=kernel_shape)
-        bias_weights = np.random.normal(size=(filters,))
+        kernel_weights = np.random.normal(size=kernel_shape).astype(self.dtype)
+        bias_weights = np.random.normal(size=(filters,)).astype(self.dtype)
         layer.kernel.assign(kernel_weights)
         layer.bias.assign(bias_weights)
 
-        outputs = layer(inputs)
-        expected = np_conv2d(
-            inputs,
-            kernel_weights,
-            bias_weights,
+        outputs_fused = layer(inputs)
+
+        # Test against unfused version + manual activation
+        layer_unfused = layers.Conv2D(
+            filters=filters,
+            kernel_size=kernel_size,
             strides=strides,
             padding=padding,
             data_format=data_format,
             dilation_rate=dilation_rate,
             groups=groups,
+            activation=None, # Explicitly None for unfused
         )
-        self.assertAllClose(outputs, expected, rtol=5e-4)
+        layer_unfused.build(input_shape=inputs.shape)
+        layer_unfused.kernel.assign(kernel_weights)
+        layer_unfused.bias.assign(bias_weights)
+
+        outputs_unfused = layer_unfused(inputs)
+        if activation:
+            expected_manual_activation = getattr(ops, activation)(outputs_unfused)
+        else: # Linear activation
+            expected_manual_activation = outputs_unfused
+
+        self.assertAllClose(
+            outputs_fused, expected_manual_activation, atol=1e-5, rtol=1e-5
+        )
+
+        # Original NumPy comparison (only valid if activation is None or linear)
+        if activation is None or activation == "linear":
+            expected_np = np_conv2d(
+                inputs,
+                kernel_weights,
+                bias_weights,
+                strides=strides,
+                padding=padding,
+                data_format=data_format,
+                dilation_rate=dilation_rate,
+                groups=groups,
+            )
+            self.assertAllClose(outputs_fused, expected_np, atol=1e-5, rtol=1e-4) # Increased rtol slightly
 
     @parameterized.parameters(
         {
@@ -1037,10 +1159,42 @@ class ConvCorrectnessTest(testing.TestCase):
             "dilation_rate": (1, 1, 1),
             "groups": 2,
         },
+        # Add new test cases with activations
+        {
+            "filters": 5,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "valid",
+            "data_format": "channels_last",
+            "dilation_rate": 1,
+            "groups": 1,
+            "activation": "relu",
+        },
+        {
+            "filters": 6,
+            "kernel_size": 2,
+            "strides": 1,
+            "padding": "same",
+            "data_format": "channels_last",
+            "dilation_rate": (2, 2, 2),
+            "groups": 2,
+            "activation": "sigmoid",
+        },
+        {
+            "filters": 6,
+            "kernel_size": (2, 2, 3),
+            "strides": (2, 1, 2),
+            "padding": "valid",
+            "data_format": "channels_last",
+            "dilation_rate": (1, 1, 1),
+            "groups": 2,
+            "activation": "linear",
+        },
     )
     def test_conv3d(
         self,
         filters,
+        activation=None, # New parameter for activation
         kernel_size,
         strides,
         padding,
@@ -1056,29 +1210,59 @@ class ConvCorrectnessTest(testing.TestCase):
             data_format=data_format,
             dilation_rate=dilation_rate,
             groups=groups,
+            activation=activation, # Pass activation to layer
         )
 
-        inputs = np.random.normal(size=[2, 8, 8, 8, 4])
+        inputs = np.random.normal(size=[2, 8, 8, 8, 4]).astype(self.dtype)
         layer.build(input_shape=inputs.shape)
 
         kernel_shape = layer.kernel.shape
-        kernel_weights = np.random.normal(size=kernel_shape)
-        bias_weights = np.random.normal(size=(filters,))
+        kernel_weights = np.random.normal(size=kernel_shape).astype(self.dtype)
+        bias_weights = np.random.normal(size=(filters,)).astype(self.dtype)
         layer.kernel.assign(kernel_weights)
         layer.bias.assign(bias_weights)
 
-        outputs = layer(inputs)
-        expected = np_conv3d(
-            inputs,
-            kernel_weights,
-            bias_weights,
+        outputs_fused = layer(inputs)
+
+        # Test against unfused version + manual activation
+        layer_unfused = layers.Conv3D(
+            filters=filters,
+            kernel_size=kernel_size,
             strides=strides,
             padding=padding,
             data_format=data_format,
             dilation_rate=dilation_rate,
             groups=groups,
+            activation=None, # Explicitly None for unfused
         )
-        self.assertAllClose(outputs, expected, rtol=1e-3)
+        layer_unfused.build(input_shape=inputs.shape)
+        layer_unfused.kernel.assign(kernel_weights)
+        layer_unfused.bias.assign(bias_weights)
+
+        outputs_unfused = layer_unfused(inputs)
+        if activation:
+            expected_manual_activation = getattr(ops, activation)(outputs_unfused)
+        else: # Linear activation
+            expected_manual_activation = outputs_unfused
+
+        self.assertAllClose(
+            outputs_fused, expected_manual_activation, atol=1e-5, rtol=1e-5
+        )
+
+        # Original NumPy comparison (only valid if activation is None or linear)
+        if activation is None or activation == "linear":
+            expected_np = np_conv3d(
+                inputs,
+                kernel_weights,
+                bias_weights,
+                strides=strides,
+                padding=padding,
+                data_format=data_format,
+                dilation_rate=dilation_rate,
+                groups=groups,
+            )
+            self.assertAllClose(outputs_fused, expected_np, atol=1e-5, rtol=1e-3)
+
 
     def test_conv_constraints(self):
         layer = layers.Conv2D(

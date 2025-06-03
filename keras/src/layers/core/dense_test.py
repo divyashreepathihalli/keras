@@ -205,6 +205,84 @@ class DenseTest(testing.TestCase):
         layer.build((None, 2))
         self.assertIsInstance(layer.bias.constraint, constraints.NonNeg)
 
+    @parameterized.named_parameters(
+        ("relu", "relu"),
+        ("sigmoid", "sigmoid"),
+        ("linear", "linear"),
+        ("no_activation", None),
+    )
+    def test_dense_fused_activation_correctness(self, activation_to_test):
+        self._run_dense_fused_correctness_check(
+            units=4,
+            activation_to_test=activation_to_test,
+            input_dims=3,
+            batch_size=2,
+        )
+        self._run_dense_fused_correctness_check(
+            units=8,
+            activation_to_test=activation_to_test,
+            input_dims=5,
+            batch_size=3,
+        )
+
+    def _run_dense_fused_correctness_check(
+        self, units, activation_to_test, input_dims, batch_size
+    ):
+        # Test with bias
+        layer_fused = layers.Dense(units=units, activation=activation_to_test)
+        inputs = np.random.rand(batch_size, input_dims).astype(self.dtype)
+        layer_fused.build(inputs.shape)
+
+        kernel_weights = np.random.rand(input_dims, units).astype(self.dtype)
+        bias_weights = np.random.rand(units).astype(self.dtype)
+        layer_fused.set_weights([kernel_weights, bias_weights])
+
+        output_fused = layer_fused(inputs)
+
+        # Sequential model for comparison (with bias)
+        model_sequential_bias = models.Sequential(
+            [
+                layers.Dense(units=units, use_bias=True, activation=None),
+            ]
+        )
+        if activation_to_test is not None:
+            model_sequential_bias.add(layers.Activation(activation_to_test))
+
+        model_sequential_bias.build(inputs.shape)
+        model_sequential_bias.layers[0].set_weights(
+            [kernel_weights, bias_weights]
+        )
+        output_sequential_bias = model_sequential_bias(inputs)
+        self.assertAllClose(
+            output_fused, output_sequential_bias, atol=1e-6, rtol=1e-6
+        )
+
+        # Test without bias
+        layer_fused_no_bias = layers.Dense(
+            units=units, use_bias=False, activation=activation_to_test
+        )
+        layer_fused_no_bias.build(inputs.shape)
+        layer_fused_no_bias.set_weights([kernel_weights])
+        output_fused_no_bias = layer_fused_no_bias(inputs)
+
+        model_sequential_no_bias = models.Sequential(
+            [
+                layers.Dense(units=units, use_bias=False, activation=None),
+            ]
+        )
+        if activation_to_test is not None:
+            model_sequential_no_bias.add(layers.Activation(activation_to_test))
+
+        model_sequential_no_bias.build(inputs.shape)
+        model_sequential_no_bias.layers[0].set_weights([kernel_weights])
+        output_sequential_no_bias = model_sequential_no_bias(inputs)
+        self.assertAllClose(
+            output_fused_no_bias,
+            output_sequential_no_bias,
+            atol=1e-6,
+            rtol=1e-6,
+        )
+
     @pytest.mark.requires_trainable_backend
     def test_enable_lora(self):
         layer = layers.Dense(units=16)

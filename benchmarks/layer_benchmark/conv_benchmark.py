@@ -48,6 +48,48 @@ def benchmark_conv1D(
     )
 
 
+def benchmark_conv1D_with_relu(
+    num_samples,
+    batch_size,
+    jit_compile=True,
+):
+    layer_name = "Conv1D"
+    init_args = {
+        "filters": 64,
+        "kernel_size": 2,
+        "activation": "relu",
+    }
+    benchmark = LayerBenchmark(
+        layer_name,
+        init_args,
+        input_shape=[1024, 256],
+        jit_compile=jit_compile,
+    )
+    benchmark.benchmark_predict(num_samples=num_samples, batch_size=batch_size)
+    benchmark.benchmark_train(num_samples=num_samples, batch_size=batch_size)
+
+
+def benchmark_conv1D_with_sigmoid(
+    num_samples,
+    batch_size,
+    jit_compile=True,
+):
+    layer_name = "Conv1D"
+    init_args = {
+        "filters": 64,
+        "kernel_size": 2,
+        "activation": "sigmoid",
+    }
+    benchmark = LayerBenchmark(
+        layer_name,
+        init_args,
+        input_shape=[1024, 256],
+        jit_compile=jit_compile,
+    )
+    benchmark.benchmark_predict(num_samples=num_samples, batch_size=batch_size)
+    benchmark.benchmark_train(num_samples=num_samples, batch_size=batch_size)
+
+
 def benchmark_conv2D(
     num_samples,
     batch_size,
@@ -76,6 +118,48 @@ def benchmark_conv2D(
     )
 
 
+def benchmark_conv2D_with_relu(
+    num_samples,
+    batch_size,
+    jit_compile=True,
+):
+    layer_name = "Conv2D"
+    init_args = {
+        "filters": 16,
+        "kernel_size": 2,
+        "activation": "relu",
+    }
+    benchmark = LayerBenchmark(
+        layer_name,
+        init_args,
+        input_shape=[128, 128, 4],
+        jit_compile=jit_compile,
+    )
+    benchmark.benchmark_predict(num_samples=num_samples, batch_size=batch_size)
+    benchmark.benchmark_train(num_samples=num_samples, batch_size=batch_size)
+
+
+def benchmark_conv2D_with_sigmoid(
+    num_samples,
+    batch_size,
+    jit_compile=True,
+):
+    layer_name = "Conv2D"
+    init_args = {
+        "filters": 16,
+        "kernel_size": 2,
+        "activation": "sigmoid",
+    }
+    benchmark = LayerBenchmark(
+        layer_name,
+        init_args,
+        input_shape=[128, 128, 4],
+        jit_compile=jit_compile,
+    )
+    benchmark.benchmark_predict(num_samples=num_samples, batch_size=batch_size)
+    benchmark.benchmark_train(num_samples=num_samples, batch_size=batch_size)
+
+
 def benchmark_conv3D(
     num_samples,
     batch_size,
@@ -102,6 +186,48 @@ def benchmark_conv3D(
         num_samples=num_samples,
         batch_size=batch_size,
     )
+
+
+def benchmark_conv3D_with_relu(
+    num_samples,
+    batch_size,
+    jit_compile=True,
+):
+    layer_name = "Conv3D"
+    init_args = {
+        "filters": 16,
+        "kernel_size": 2,
+        "activation": "relu",
+    }
+    benchmark = LayerBenchmark(
+        layer_name,
+        init_args,
+        input_shape=[32, 32, 32, 4],
+        jit_compile=jit_compile,
+    )
+    benchmark.benchmark_predict(num_samples=num_samples, batch_size=batch_size)
+    benchmark.benchmark_train(num_samples=num_samples, batch_size=batch_size)
+
+
+def benchmark_conv3D_with_sigmoid(
+    num_samples,
+    batch_size,
+    jit_compile=True,
+):
+    layer_name = "Conv3D"
+    init_args = {
+        "filters": 16,
+        "kernel_size": 2,
+        "activation": "sigmoid",
+    }
+    benchmark = LayerBenchmark(
+        layer_name,
+        init_args,
+        input_shape=[32, 32, 32, 4],
+        jit_compile=jit_compile,
+    )
+    benchmark.benchmark_predict(num_samples=num_samples, batch_size=batch_size)
+    benchmark.benchmark_train(num_samples=num_samples, batch_size=batch_size)
 
 
 def benchmark_depthwise_conv1D(
@@ -313,6 +439,12 @@ BENCHMARK_NAMES = {
     "benchmark_conv1D_transpose": benchmark_conv1D_transpose,
     "benchmark_conv2D_transpose": benchmark_conv2D_transpose,
     "benchmark_conv3D_transpose": benchmark_conv3D_transpose,
+    "benchmark_conv1D_with_relu": benchmark_conv1D_with_relu,
+    "benchmark_conv1D_with_sigmoid": benchmark_conv1D_with_sigmoid,
+    "benchmark_conv2D_with_relu": benchmark_conv2D_with_relu,
+    "benchmark_conv2D_with_sigmoid": benchmark_conv2D_with_sigmoid,
+    "benchmark_conv3D_with_relu": benchmark_conv3D_with_relu,
+    "benchmark_conv3D_with_sigmoid": benchmark_conv3D_with_sigmoid,
 }
 
 

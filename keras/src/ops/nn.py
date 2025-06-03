@@ -1345,6 +1345,176 @@ def conv(
     )
 
 
+class ConvAndActivation(Operation):
+    def __init__(
+        self,
+        strides=1,
+        padding="valid",
+        data_format=None,
+        dilation_rate=1,
+        activation_fn=None,
+    ):
+        super().__init__()
+        self.strides = strides
+        self.padding = padding.lower()
+        self.data_format = data_format
+        self.dilation_rate = dilation_rate
+        self.activation_fn = activation_fn
+
+    def call(self, inputs, kernel, bias):
+        return backend.nn.conv_and_activation(
+            inputs,
+            kernel,
+            bias=bias,
+            strides=self.strides,
+            padding=self.padding,
+            data_format=self.data_format,
+            dilation_rate=self.dilation_rate,
+            activation_fn=self.activation_fn,
+        )
+
+    def compute_output_spec(self, inputs, kernel, bias):
+        output_shape = operation_utils.compute_conv_output_shape(
+            inputs.shape,
+            kernel.shape[-1],
+            kernel.shape[:-2],
+            self.strides,
+            self.padding,
+            self.data_format,
+            self.dilation_rate,
+        )
+        return KerasTensor(output_shape, dtype=inputs.dtype)
+
+
+@keras_export(["keras.ops.conv_and_activation", "keras.ops.nn.conv_and_activation"])
+def conv_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    strides=1,
+    padding="valid",
+    data_format=None,
+    dilation_rate=1,
+    activation_fn=None,
+):
+    """General N-D convolution with fused activation.
+
+    This ops supports 1D, 2D and 3D convolution.
+
+    Args:
+        inputs: Tensor of rank N+2. `inputs` has shape
+            `(batch_size,) + inputs_spatial_shape + (num_channels,)` if
+            `data_format="channels_last"`, or
+            `(batch_size, num_channels) + inputs_spatial_shape` if
+            `data_format="channels_first"`.
+        kernel: Tensor of rank N+2. `kernel` has shape
+            `(kernel_spatial_shape, num_input_channels, num_output_channels)`.
+            `num_input_channels` should match the number of channels in
+            `inputs`.
+        bias: Optional bias tensor of shape `(num_output_channels,)`.
+        strides: int or int tuple/list of `len(inputs_spatial_shape)`,
+            specifying the strides of the convolution along each spatial
+            dimension. If `strides` is int, then every spatial dimension shares
+            the same `strides`.
+        padding: string, either `"valid"` or `"same"`. `"valid"` means no
+            padding is applied, and `"same"` results in padding evenly to the
+            left/right or up/down of the input such that output has the
+            same height/width dimension as the input when `strides=1`.
+        data_format: A string, either `"channels_last"` or `"channels_first"`.
+            `data_format` determines the ordering of the dimensions in the
+            inputs. If `data_format="channels_last"`, `inputs` is of shape
+            `(batch_size, ..., channels)` while if
+            `data_format="channels_first"`, `inputs` is of shape
+            `(batch_size, channels, ...)`.
+        dilation_rate: int or int tuple/list of `len(inputs_spatial_shape)`,
+            specifying the dilation rate to use for dilated convolution. If
+            `dilation_rate` is int, then every spatial dimension shares
+            the same `dilation_rate`.
+        activation_fn: Activation function to apply after convolution and bias
+            addition.
+
+    Returns:
+        A tensor of rank N+2, the result of the fused conv and activation op.
+    """
+    data_format = standardize_data_format(data_format)
+    padding = padding.lower()
+    if any_symbolic_tensors((inputs, kernel, bias)):
+        return ConvAndActivation(
+            strides, padding, data_format, dilation_rate, activation_fn
+        ).symbolic_call(inputs, kernel, bias)
+    return backend.nn.conv_and_activation(
+        inputs,
+        kernel,
+        bias=bias,
+        strides=strides,
+        padding=padding,
+        data_format=data_format,
+        dilation_rate=dilation_rate,
+        activation_fn=activation_fn,
+    )
+
+
+class MatmulAndActivation(Operation):
+    def __init__(self, activation_fn=None):
+        super().__init__()
+        self.activation_fn = activation_fn
+
+    def call(self, inputs, kernel, bias):
+        return backend.nn.matmul_and_activation(
+            inputs,
+            kernel,
+            bias,
+            activation_fn=self.activation_fn,
+        )
+
+    def compute_output_spec(self, inputs, kernel, bias):
+        if inputs.shape is None or kernel.shape is None:
+            return KerasTensor(None, dtype=inputs.dtype)
+        output_shape = list(inputs.shape)
+        output_shape[-1] = kernel.shape[-1]
+        if len(inputs.shape) > 2 and len(kernel.shape) == 2:
+            # Broadcasting case, e.g. inputs (b, t, d), kernel (d, u)
+            # Output will be (b, t, u)
+            pass
+        elif len(inputs.shape) == 2 and len(kernel.shape) == 2:
+            # Standard 2D matmul
+            pass
+        # Add more complex shape inference if needed, e.g. batch matmul
+        # For now, assume last dim of kernel is units, and it replaces last dim of inputs
+        return KerasTensor(tuple(output_shape), dtype=inputs.dtype)
+
+
+@keras_export(["keras.ops.matmul_and_activation", "keras.ops.nn.matmul_and_activation"])
+def matmul_and_activation(
+    inputs,
+    kernel,
+    bias=None,
+    activation_fn=None,
+):
+    """Computes `activation(matmul(inputs, kernel) + bias)`.
+
+    Args:
+        inputs: Input tensor.
+        kernel: Kernel tensor (matrix).
+        bias: Optional bias tensor.
+        activation_fn: Activation function to apply after matmul and bias
+            addition.
+
+    Returns:
+        A tensor, the result of the fused matmul, bias addition, and activation.
+    """
+    if any_symbolic_tensors((inputs, kernel, bias)):
+        return MatmulAndActivation(activation_fn=activation_fn).symbolic_call(
+            inputs, kernel, bias
+        )
+    return backend.nn.matmul_and_activation(
+        inputs,
+        kernel,
+        bias,
+        activation_fn=activation_fn,
+    )
+
+
 class DepthwiseConv(Operation):
     def __init__(
         self,

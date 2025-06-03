@@ -396,3 +396,213 @@ class GroupedQueryAttentionTest(testing.TestCase):
             " attention scores.",
         ):
             layer(query=query, value=value, return_attention_scores=True)
+
+    def test_kv_cache_usage(self):
+        num_query_heads = 4
+        num_key_value_heads = 2 # GQA specific
+        head_dim = 2
+        feature_dim = num_query_heads * head_dim # 8, this is for query's expected last dim
+                                                # For K/V, feature_dim is num_key_value_heads * head_dim = 4
+
+        layer = layers.GroupedQueryAttention(
+            num_query_heads=num_query_heads,
+            num_key_value_heads=num_key_value_heads,
+            head_dim=head_dim,
+        )
+
+        batch_size = 2
+        target_seq_len_1 = 1 # Query for first step
+        # For GQA, value/key input feature_dim corresponds to num_key_value_heads * head_dim
+        kv_feature_dim = num_key_value_heads * head_dim
+        source_seq_len_1 = 3 # Initial KV sequence length
+
+        query1 = backend.random.normal(shape=(batch_size, target_seq_len_1, feature_dim))
+        # Value for GQA has feature_dim based on num_key_value_heads
+        value1 = backend.random.normal(shape=(batch_size, source_seq_len_1, kv_feature_dim))
+        key1 = value1
+
+        # First call (populate cache)
+        # training=False is important for cache to be used.
+        output1, cache1 = layer(query1, value1, key=key1, cache=None, training=False)
+
+        self.assertEqual(output1.shape, (batch_size, target_seq_len_1, feature_dim))
+        self.assertIsInstance(cache1, tuple)
+        self.assertEqual(len(cache1), 2)
+
+        # cache1[0] is key_cache, cache1[1] is value_cache (unrepeated)
+        # Expected shape: (batch_size, source_seq_len, num_key_value_heads, head_dim)
+        self.assertEqual(cache1[0].shape, (batch_size, source_seq_len_1, num_key_value_heads, head_dim))
+        self.assertEqual(cache1[1].shape, (batch_size, source_seq_len_1, num_key_value_heads, head_dim))
+
+        # Second call (use cache)
+        target_seq_len_2 = 1 # Query for second step (new token)
+        source_seq_len_2 = 1 # New KV for this step
+
+        query2 = backend.random.normal(shape=(batch_size, target_seq_len_2, feature_dim))
+        value2 = backend.random.normal(shape=(batch_size, source_seq_len_2, kv_feature_dim))
+        key2 = value2
+
+        output2, cache2 = layer(query2, value2, key=key2, cache=cache1, training=False)
+
+        self.assertEqual(output2.shape, (batch_size, target_seq_len_2, feature_dim))
+        expected_total_kv_len = source_seq_len_1 + source_seq_len_2
+        self.assertEqual(cache2[0].shape, (batch_size, expected_total_kv_len, num_key_value_heads, head_dim))
+        self.assertEqual(cache2[1].shape, (batch_size, expected_total_kv_len, num_key_value_heads, head_dim))
+
+        # Third call (use cache, return attention scores)
+        target_seq_len_3 = 1
+        source_seq_len_3 = 1
+        query3 = backend.random.normal(shape=(batch_size, target_seq_len_3, feature_dim))
+        value3 = backend.random.normal(shape=(batch_size, source_seq_len_3, kv_feature_dim))
+        key3 = value3
+
+        output3, scores3, cache3 = layer(
+            query3, value3, key=key3, cache=cache1, # Using cache1 and adding value3
+            training=False, return_attention_scores=True
+        )
+
+        self.assertEqual(output3.shape, (batch_size, target_seq_len_3, feature_dim))
+
+        expected_kv_len_for_scores3 = source_seq_len_1 + source_seq_len_3
+        # scores shape: (batch, num_query_heads, target_seq_len, source_seq_len_total_repeated)
+        self.assertEqual(scores3.shape, (batch_size, num_query_heads, target_seq_len_3, expected_kv_len_for_scores3))
+
+        self.assertEqual(cache3[0].shape, (batch_size, expected_kv_len_for_scores3, num_key_value_heads, head_dim))
+        self.assertEqual(cache3[1].shape, (batch_size, expected_kv_len_for_scores3, num_key_value_heads, head_dim))
+
+
+    def test_kv_cache_with_causal_mask(self):
+        num_query_heads = 4
+        num_key_value_heads = 2
+        head_dim = 2
+        feature_dim = num_query_heads * head_dim
+        kv_feature_dim = num_key_value_heads * head_dim
+
+        layer = layers.GroupedQueryAttention(
+            num_query_heads=num_query_heads,
+            num_key_value_heads=num_key_value_heads,
+            head_dim=head_dim,
+        )
+
+        batch_size = 2
+        target_seq_len_1 = 1
+        source_seq_len_1 = 3
+
+        query1 = backend.random.normal(shape=(batch_size, target_seq_len_1, feature_dim))
+        value1 = backend.random.normal(shape=(batch_size, source_seq_len_1, kv_feature_dim))
+
+        output1, cache1 = layer(
+            query1, value1, key=value1, cache=None, training=False, use_causal_mask=True
+        )
+        self.assertEqual(output1.shape, (batch_size, target_seq_len_1, feature_dim))
+        self.assertEqual(cache1[0].shape, (batch_size, source_seq_len_1, num_key_value_heads, head_dim))
+        self.assertEqual(cache1[1].shape, (batch_size, source_seq_len_1, num_key_value_heads, head_dim))
+
+        target_seq_len_2 = 1
+        source_seq_len_2 = 1
+        query2 = backend.random.normal(shape=(batch_size, target_seq_len_2, feature_dim))
+        value2 = backend.random.normal(shape=(batch_size, source_seq_len_2, kv_feature_dim))
+
+        output2, cache2 = layer(
+            query2, value2, key=value2, cache=cache1, training=False, use_causal_mask=True
+        )
+        self.assertEqual(output2.shape, (batch_size, target_seq_len_2, feature_dim))
+        expected_total_kv_len = source_seq_len_1 + source_seq_len_2
+        self.assertEqual(cache2[0].shape, (batch_size, expected_total_kv_len, num_key_value_heads, head_dim))
+        self.assertEqual(cache2[1].shape, (batch_size, expected_total_kv_len, num_key_value_heads, head_dim))
+
+        output3, scores3, cache3 = layer(
+            query2, value2, key=value2, cache=cache1,
+            training=False, use_causal_mask=True, return_attention_scores=True
+        )
+        self.assertEqual(output3.shape, (batch_size, target_seq_len_2, feature_dim))
+        self.assertEqual(scores3.shape, (batch_size, num_query_heads, target_seq_len_2, expected_total_kv_len))
+        self.assertEqual(cache3[0].shape, (batch_size, expected_total_kv_len, num_key_value_heads, head_dim))
+
+    @parameterized.parameters([((1, 2, 8), (1,2,4)), ((2, 3, 16), (2,3,8))]) # query_shape, kv_shape (dim changed)
+    def test_symbolic_return_attention_scores_and_cache(self, q_shape_tuple, kv_shape_tuple):
+        gqa = layers.GroupedQueryAttention(num_query_heads=4, num_key_value_heads=2, head_dim=int(q_shape_tuple[-1]/4))
+
+        q_input = layers.Input(batch_shape=q_shape_tuple)
+        v_input = layers.Input(batch_shape=kv_shape_tuple) # Value/Key have different dim for GQA usually
+
+        # Symbolic cache input
+        # Shape of cache elements: (batch_size, seq_len, num_key_value_heads, head_dim)
+        cache_k_shape = (q_shape_tuple[0], None, gqa.num_key_value_heads, gqa.head_dim)
+        cache_v_shape = (q_shape_tuple[0], None, gqa.num_key_value_heads, gqa.head_dim)
+
+        cache_k_sym = backend.KerasTensor(cache_k_shape, dtype=q_input.dtype)
+        cache_v_sym = backend.KerasTensor(cache_v_shape, dtype=v_input.dtype)
+        symbolic_cache_input = (cache_k_sym, cache_v_sym)
+
+        result = gqa(q_input, v_input, cache=symbolic_cache_input, return_attention_scores=True)
+        self.assertLen(result, 3)
+        self.assertEqual(len(result[2]), 2)
+
+        # Eager call
+        q_np = np.random.random(q_shape_tuple).astype(backend.floatx())
+        v_np = np.random.random(kv_shape_tuple).astype(backend.floatx())
+
+        past_seq_len = 2
+        eager_cache_k_shape = (q_shape_tuple[0], past_seq_len, gqa.num_key_value_heads, gqa.head_dim)
+        eager_cache_v_shape = (q_shape_tuple[0], past_seq_len, gqa.num_key_value_heads, gqa.head_dim)
+        eager_cache_k = backend.ops.zeros(eager_cache_k_shape, dtype=q_np.dtype)
+        eager_cache_v = backend.ops.zeros(eager_cache_v_shape, dtype=v_np.dtype)
+        eager_cache_input = (eager_cache_k, eager_cache_v)
+
+        out_with_cache = gqa(q_np, v_np, cache=eager_cache_input, return_attention_scores=True, training=False)
+        self.assertLen(out_with_cache, 3)
+        self.assertEqual(len(out_with_cache[2]), 2)
+
+        self.assertEqual(result[0].shape, out_with_cache[0].shape)
+        self.assertEqual(len(result[1].shape), len(out_with_cache[1].shape))
+        self.assertEqual(result[1].shape[:-1], out_with_cache[1].shape[:-1])
+
+        self.assertEqual(len(result[2][0].shape), len(out_with_cache[2][0].shape))
+        self.assertEqual(result[2][0].shape[0], out_with_cache[2][0].shape[0])
+        self.assertEqual(result[2][0].shape[2:], out_with_cache[2][0].shape[2:])
+        self.assertEqual(len(result[2][1].shape), len(out_with_cache[2][1].shape))
+        self.assertEqual(result[2][1].shape[0], out_with_cache[2][1].shape[0])
+        self.assertEqual(result[2][1].shape[2:], out_with_cache[2][1].shape[2:])
+
+
+    @parameterized.parameters([("return_attention_scores_true", True), ("return_attention_scores_false", False)])
+    def test_symbolic_call_structure(self, return_scores):
+        num_q_heads = 4
+        num_kv_heads = 2
+        head_dim = 2
+        q_dim = num_q_heads * head_dim
+        kv_dim = num_kv_heads * head_dim
+
+        gqa = layers.GroupedQueryAttention(num_query_heads=num_q_heads, num_key_value_heads=num_kv_heads, head_dim=head_dim)
+
+        shape_q = (2, 5, q_dim)
+        shape_kv = (2, 5, kv_dim)
+        q_input = layers.Input(batch_shape=shape_q)
+        v_input = layers.Input(batch_shape=shape_kv) # Value/Key have different dim for GQA
+
+        cache_k_shape = (shape_q[0], None, gqa.num_key_value_heads, gqa.head_dim)
+        cache_v_shape = (shape_q[0], None, gqa.num_key_value_heads, gqa.head_dim)
+        cache_k_sym = backend.KerasTensor(cache_k_shape, dtype=q_input.dtype)
+        cache_v_sym = backend.KerasTensor(cache_v_shape, dtype=v_input.dtype)
+        symbolic_cache_arg = (cache_k_sym, cache_v_sym)
+
+        result = gqa(q_input, v_input, cache=symbolic_cache_arg, return_attention_scores=return_scores)
+
+        if return_scores:
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(len(result), 3)
+            self.assertIsInstance(result[0], backend.KerasTensor)
+            self.assertIsInstance(result[1], backend.KerasTensor)
+            self.assertIsInstance(result[2], tuple)
+            self.assertEqual(len(result[2]), 2)
+            self.assertIsInstance(result[2][0], backend.KerasTensor)
+            self.assertIsInstance(result[2][1], backend.KerasTensor)
+        else:
+            self.assertIsInstance(result, tuple)
+            self.assertEqual(len(result), 2)
+            self.assertIsInstance(result[0], backend.KerasTensor)
+            self.assertIsInstance(result[1], tuple)
+            self.assertEqual(len(result[1]), 2)
+            self.assertIsInstance(result[1][0], backend.KerasTensor)
+            self.assertIsInstance(result[1][1], backend.KerasTensor)

@@ -128,7 +128,8 @@ class GroupedQueryAttention(Layer):
         self.seed = seed
 
         self._inverse_sqrt_head_dim = 1.0 / math.sqrt(float(self.head_dim))
-        self._return_attention_scores = False
+        self._return_attention_scores = False # Will be set in call
+        self.built_from_signature = False # Ensure build is properly called
 
         # Check for flash attention constraints
         if self._flash_attention and self.dropout > 0.0:
@@ -234,35 +235,64 @@ class GroupedQueryAttention(Layer):
         training=None,
         use_causal_mask=False,
     ):
-        self._return_attention_scores = return_attention_scores
+        self._return_attention_scores = return_attention_scores # Instance flag
         if key is None:
             key = value
 
+        if training is None:
+            training = backend.learning_phase()
+        else:
+            training = ops.convert_to_tensor(training, dtype="bool")
+
+        query_orig_mask = backend.get_keras_mask(query) # Store original mask
+
+        query = self._query_dense(query) # (B, T, num_query_heads, head_dim)
+
+        # K, V are initially (B, S, num_key_value_heads, head_dim)
+        current_key_unrepeated = self._key_dense(key)
+        current_value_unrepeated = self._value_dense(value)
+
+        if cache is not None and not training:
+            past_key_unrepeated, past_value_unrepeated = cache
+            new_key_unrepeated = ops.concatenate(
+                [past_key_unrepeated, current_key_unrepeated], axis=1
+            )
+            new_value_unrepeated = ops.concatenate(
+                [past_value_unrepeated, current_value_unrepeated], axis=1
+            )
+        else:
+            new_key_unrepeated = current_key_unrepeated
+            new_value_unrepeated = current_value_unrepeated
+
+        # Determine full sequence length for masks
+        # This is S_total for causal mask if cache is used
+        current_total_kv_seq_len = ops.shape(new_key_unrepeated)[1]
+
         attention_mask = self._compute_attention_mask(
-            query,
-            value,
-            query_mask=query_mask,
-            value_mask=value_mask,
-            key_mask=key_mask,
-            attention_mask=attention_mask,
+            query, # Query shape (B, T, ...)
+            new_value_unrepeated, # Value shape (B, S_total, num_kv_heads, head_dim) for length calc
+            query_mask=query_orig_mask, # Mask for query (B, T)
+            value_mask=value_mask, # Mask for current value (B, S_current)
+            key_mask=key_mask,     # Mask for current key (B, S_current)
+            attention_mask=attention_mask, # External mask (B, T, S_total or S_current)
             use_causal_mask=use_causal_mask,
+            # Pass the total key sequence length for causal mask generation
+            cached_kv_length=current_total_kv_seq_len if use_causal_mask else None
         )
 
-        query = self._query_dense(query)
-        key = self._key_dense(key)
-        value = self._value_dense(value)
-
-        key = ops.repeat(
-            key, self.num_repeats, axis=2
-        )  # (batch_dim, source_seq_len, query_heads, head_dim)
-        value = ops.repeat(
-            value, self.num_repeats, axis=2
-        )  # (batch_dim, source_seq_len, query_heads, head_dim)
+        # Repeat K, V after potential concatenation with cache
+        # Resulting K, V for attention: (B, S_total, num_query_heads, head_dim)
+        key_for_attention = ops.repeat(
+            new_key_unrepeated, self.num_repeats, axis=2
+        )
+        value_for_attention = ops.repeat(
+            new_value_unrepeated, self.num_repeats, axis=2
+        )
 
         output, scores = self._compute_attention(
             query,
-            key,
-            value,
+            key_for_attention,
+            value_for_attention,
             attention_mask=attention_mask,
             training=training,
         )
@@ -271,19 +301,21 @@ class GroupedQueryAttention(Layer):
             output
         )  # (batch_dim, target_seq_len, feature_dim)
 
-        if return_attention_scores:
-            return output, scores
-        return output
+        current_cache_unrepeated = (new_key_unrepeated, new_value_unrepeated)
+        if self._return_attention_scores:
+            return output, scores, current_cache_unrepeated
+        return output, current_cache_unrepeated
 
     def _compute_attention_mask(
         self,
         query,
-        value,
+        value, # This is new_value_unrepeated
         query_mask=None,
         value_mask=None,
         key_mask=None,
         attention_mask=None,
         use_causal_mask=False,
+        cached_kv_length=None, # New argument for causal mask with cache
     ):
         """Computes the attention mask, using the Keras masks of the inputs.
 
@@ -322,20 +354,34 @@ class GroupedQueryAttention(Layer):
             auto_mask = ops.expand_dims(query_mask, -1)  # shape is [B, T, 1]
         if value_mask is not None:
             value_mask = ops.cast(value_mask, "bool")  # defensive casting
-            # B = batch size, S == max value length
-            mask = ops.expand_dims(value_mask, -2)  # shape is [B, 1, S]
+            # B = batch size, S == max value length (of current value, not cached)
+            # This mask should apply to the S dimension. If cache is used,
+            # this mask refers to S_current. The final attention_mask will be
+            # against S_total. Careful handling of mask concatenation might be
+            # needed if value_mask is for S_current and cache is used.
+            # For now, assume value_mask is [B, 1, S_current_or_S_total]
+            mask = ops.expand_dims(value_mask, -2)
             auto_mask = mask if auto_mask is None else auto_mask & mask
+
         if key_mask is not None:
-            key_mask = ops.cast(key_mask, "bool")  # defensive casting
-            # B == batch size, S == max key length == max value length
-            mask = ops.expand_dims(key_mask, -2)  # shape is [B, 1, S]
+            key_mask = ops.cast(key_mask, "bool")
+            # Similar to value_mask, if cache is used, this applies to S_current.
+            # For now, assume key_mask is [B, 1, S_current_or_S_total]
+            mask = ops.expand_dims(key_mask, -2)
             auto_mask = mask if auto_mask is None else auto_mask & mask
+
         if use_causal_mask:
-            # the shape of the causal mask is [1, T, S]
-            mask = self._compute_causal_mask(query, value)
+            # the shape of the causal mask is [1, T, S_total]
+            mask = self._compute_causal_mask(
+                query, value, v_seq_length_override=cached_kv_length
+            )
             auto_mask = mask if auto_mask is None else auto_mask & mask
+
+        # `attention_mask` arg is assumed to be [B, T, S_total_or_S_current]
+        # If cache is used, S should be S_total.
+        # If S_current, it needs careful concatenation like key/value_mask.
+        # Current assumption: external `attention_mask` is correctly shaped for S_total if cache.
         if auto_mask is not None:
-            # merge attention_mask & automatic mask, to shape [B, T, S]
             attention_mask = (
                 auto_mask
                 if attention_mask is None
@@ -359,14 +405,21 @@ class GroupedQueryAttention(Layer):
         Args:
             query: query tensor of shape `(B, T, ...)`.
             value: value tensor of shape `(B, S, ...)` (optional, defaults to
-                query).
+                query). S is S_total_unrepeated for length calculation.
+            v_seq_length_override: Optional integer to override value sequence length.
 
         Returns:
             mask: a boolean tensor of shape `(1, T, S)` containing a lower
-                triangular matrix of shape `(T, S)`.
+                triangular matrix of shape `(T, S)`. S is S_total.
         """
         q_seq_length = ops.shape(query)[1]
-        v_seq_length = q_seq_length if value is None else ops.shape(value)[1]
+        # value here is new_value_unrepeated for GQA
+        # its shape[1] is S_total (unrepeated)
+        v_seq_length = (
+            v_seq_length_override
+            if v_seq_length_override is not None
+            else (q_seq_length if value is None else ops.shape(value)[1])
+        )
         ones_mask = ops.ones((1, q_seq_length, v_seq_length), dtype="int32")
         row_index = ops.cumsum(ones_mask, axis=-2)
         col_index = ops.cumsum(ones_mask, axis=-1)
@@ -374,7 +427,7 @@ class GroupedQueryAttention(Layer):
 
     def _compute_attention(
         self, query, key, value, attention_mask=None, training=None
-    ):
+    ): # key and value are already repeated here
         # Check for flash attention constraints
         if self._flash_attention and self._return_attention_scores:
             raise ValueError(
@@ -456,26 +509,87 @@ class GroupedQueryAttention(Layer):
         query_shape,
         value_shape,
         key_shape=None,
+        # cache_shape is not passed but computed based on inputs
     ):
         if key_shape is None:
             key_shape = value_shape
 
-        if query_shape[-1] != value_shape[-1]:
-            raise ValueError(
-                "The last dimension of `query_shape` and `value_shape` "
-                f"must be equal, but are {query_shape[-1]}, {value_shape[-1]}. "
-                f"Received: query_shape={query_shape}, "
-                f"value_shape={value_shape}"
-            )
+        query_shape = tuple(query_shape)
+        value_shape = tuple(value_shape)
+        key_shape = tuple(key_shape)
 
-        if value_shape[1:-1] != key_shape[1:-1]:
-            raise ValueError(
-                "All dimensions of `value` and `key`, except the last one, "
-                f"must be equal. Received: value_shape={value_shape} and "
-                f"key_shape={key_shape}"
-            )
+        # Output shape is same as query_shape, but last dim is feature_dim
+        attention_output_shape = query_shape[:-1] + (self.feature_dim,)
 
-        return query_shape
+        # Cache shapes are for unrepeated K/V.
+        # (B, S, num_key_value_heads, head_dim)
+        # S comes from key_shape[1] or value_shape[1].
+        # This represents S_total in call, or S_current if no cache.
+        # For compute_output_shape, it's based on input spec.
+        key_seq_len = key_shape[1] # Can be None
+
+        cache_key_shape = (
+            key_shape[0], # Batch size
+            key_seq_len,  # Sequence length (can be None)
+            self.num_key_value_heads,
+            self.head_dim,
+        )
+        cache_value_shape = (
+            value_shape[0], # Batch size
+            key_seq_len,    # Sequence length (should track key's for cache)
+            self.num_key_value_heads,
+            self.head_dim,
+        )
+        cache_shape = (cache_key_shape, cache_value_shape)
+
+        if hasattr(self, "_return_attention_scores") and self._return_attention_scores:
+            # Attention scores shape: (B, num_query_heads, T, S)
+            # T is query_shape[1], S is key_seq_len (S_total)
+            score_shape = (
+                query_shape[0],
+                self.num_query_heads,
+                query_shape[1],
+                key_seq_len,
+            )
+            return attention_output_shape, score_shape, cache_shape
+        return attention_output_shape, cache_shape
+
+    def compute_output_spec(
+        self,
+        query,
+        value,
+        key=None,
+        query_mask=None,
+        value_mask=None,
+        key_mask=None,
+        attention_mask=None,
+        cache=None, # Added cache to signature
+        return_attention_scores=False,
+        training=None,
+        use_causal_mask=False,
+    ):
+        # Stash return_attention_scores to be used by compute_output_shape
+        self._return_attention_scores = return_attention_scores
+
+        key_shape_for_compute = key.shape if key is not None else value.shape
+
+        output_shapes = self.compute_output_shape(
+            query.shape, value.shape, key_shape_for_compute
+        )
+
+        # output_shapes can be (att_out_shape, cache_shape) or (att_out_shape, score_shape, cache_shape)
+
+        if return_attention_scores:
+            att_output_spec = backend.KerasTensor(output_shapes[0], dtype=query.dtype)
+            att_scores_spec = backend.KerasTensor(output_shapes[1], dtype=query.dtype)
+            cache_k_spec = backend.KerasTensor(output_shapes[2][0], dtype=key.dtype if key is not None else value.dtype)
+            cache_v_spec = backend.KerasTensor(output_shapes[2][1], dtype=value.dtype)
+            return att_output_spec, att_scores_spec, (cache_k_spec, cache_v_spec)
+        else:
+            att_output_spec = backend.KerasTensor(output_shapes[0], dtype=query.dtype)
+            cache_k_spec = backend.KerasTensor(output_shapes[1][0], dtype=key.dtype if key is not None else value.dtype)
+            cache_v_spec = backend.KerasTensor(output_shapes[1][1], dtype=value.dtype)
+            return att_output_spec, (cache_k_spec, cache_v_spec)
 
     def get_config(self):
         config = {

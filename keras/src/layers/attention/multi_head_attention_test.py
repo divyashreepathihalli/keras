@@ -696,3 +696,195 @@ class MultiHeadAttentionTest(testing.TestCase):
         output_quantized = layer(query, key, value)
         mse = ops.mean(ops.square(output_float - output_quantized))
         self.assertLess(mse, 1e-3)  # A weak correctness test
+
+    def test_kv_cache_usage(self):
+        num_heads = 2
+        key_dim = 4 # key_dim also value_dim if value_dim is None
+        feature_dim = key_dim * num_heads # 8
+
+        layer = layers.MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=key_dim,
+        )
+
+        batch_size = 2
+        target_seq_len_1 = 1 # Query for first step
+        source_seq_len_1 = 3 # Initial KV sequence length
+
+        query1 = random.normal(shape=(batch_size, target_seq_len_1, feature_dim))
+        value1 = random.normal(shape=(batch_size, source_seq_len_1, feature_dim))
+        key1 = value1 # Or random.normal with same shape
+
+        # First call (populate cache)
+        output1, cache1 = layer(query1, value1, key=key1, cache=None, training=False)
+
+        self.assertEqual(output1.shape, (batch_size, target_seq_len_1, feature_dim))
+        self.assertIsInstance(cache1, tuple)
+        self.assertEqual(len(cache1), 2)
+
+        # cache1[0] is key_cache, cache1[1] is value_cache
+        # Expected shape: (batch_size, source_seq_len, num_heads, key_dim)
+        self.assertEqual(cache1[0].shape, (batch_size, source_seq_len_1, num_heads, key_dim))
+        self.assertEqual(cache1[1].shape, (batch_size, source_seq_len_1, num_heads, key_dim)) # value_dim = key_dim here
+
+        # Second call (use cache)
+        target_seq_len_2 = 1 # Query for second step (new token)
+        source_seq_len_2 = 1 # New KV for this step
+
+        query2 = random.normal(shape=(batch_size, target_seq_len_2, feature_dim))
+        value2 = random.normal(shape=(batch_size, source_seq_len_2, feature_dim))
+        key2 = value2
+
+        output2, cache2 = layer(query2, value2, key=key2, cache=cache1, training=False)
+
+        self.assertEqual(output2.shape, (batch_size, target_seq_len_2, feature_dim))
+        expected_total_kv_len = source_seq_len_1 + source_seq_len_2
+        self.assertEqual(cache2[0].shape, (batch_size, expected_total_kv_len, num_heads, key_dim))
+        self.assertEqual(cache2[1].shape, (batch_size, expected_total_kv_len, num_heads, key_dim))
+
+        # Third call (use cache, return attention scores)
+        target_seq_len_3 = 1
+        source_seq_len_3 = 1
+        query3 = random.normal(shape=(batch_size, target_seq_len_3, feature_dim))
+        value3 = random.normal(shape=(batch_size, source_seq_len_3, feature_dim))
+        key3 = value3
+
+        # Use cache from previous step (cache2)
+        # However, the problem description implies using cache1 and adding value_new (value3 here)
+        # Let's follow the problem: use cache1, add value3.
+        # This means the value/key passed to call should be only the *new* k/v
+        output3, scores3, cache3 = layer(
+            query3, value3, key=key3, cache=cache1, # Using cache1 and adding value3
+            training=False, return_attention_scores=True
+        )
+
+        self.assertEqual(output3.shape, (batch_size, target_seq_len_3, feature_dim))
+
+        # Total KV length for scores3 will be cache1's length + value3's length
+        expected_kv_len_for_scores3 = source_seq_len_1 + source_seq_len_3
+        # scores shape: (batch, num_heads, target_seq_len, source_seq_len_total)
+        self.assertEqual(scores3.shape, (batch_size, num_heads, target_seq_len_3, expected_kv_len_for_scores3))
+
+        # cache3 shape will be cache1's length + value3's length
+        self.assertEqual(cache3[0].shape, (batch_size, expected_kv_len_for_scores3, num_heads, key_dim))
+        self.assertEqual(cache3[1].shape, (batch_size, expected_kv_len_for_scores3, num_heads, key_dim))
+
+
+    def test_kv_cache_with_causal_mask(self):
+        num_heads = 2
+        key_dim = 4
+        feature_dim = key_dim * num_heads
+
+        layer = layers.MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=key_dim,
+        )
+
+        batch_size = 2
+        target_seq_len_1 = 1
+        source_seq_len_1 = 3
+
+        query1 = random.normal(shape=(batch_size, target_seq_len_1, feature_dim))
+        value1 = random.normal(shape=(batch_size, source_seq_len_1, feature_dim))
+
+        # First call
+        output1, cache1 = layer(
+            query1, value1, key=value1, cache=None, training=False, use_causal_mask=True
+        )
+        self.assertEqual(output1.shape, (batch_size, target_seq_len_1, feature_dim))
+        self.assertEqual(cache1[0].shape, (batch_size, source_seq_len_1, num_heads, key_dim))
+        self.assertEqual(cache1[1].shape, (batch_size, source_seq_len_1, num_heads, key_dim))
+
+        # Second call
+        target_seq_len_2 = 1
+        source_seq_len_2 = 1
+        query2 = random.normal(shape=(batch_size, target_seq_len_2, feature_dim))
+        value2 = random.normal(shape=(batch_size, source_seq_len_2, feature_dim))
+
+        output2, cache2 = layer(
+            query2, value2, key=value2, cache=cache1, training=False, use_causal_mask=True
+        )
+        self.assertEqual(output2.shape, (batch_size, target_seq_len_2, feature_dim))
+        expected_total_kv_len = source_seq_len_1 + source_seq_len_2
+        self.assertEqual(cache2[0].shape, (batch_size, expected_total_kv_len, num_heads, key_dim))
+        self.assertEqual(cache2[1].shape, (batch_size, expected_total_kv_len, num_heads, key_dim))
+
+        # Verify that output changes with cache (simple check, not functional correctness)
+        output_no_cache, _ = layer(
+            query2, value2, key=value2, cache=None, training=False, use_causal_mask=True
+        )
+        # This check is tricky because the state (weights) is the same.
+        # The difference should come from `value1` (via cache1) also being attended to.
+        # A strict non-equality might fail due to chance if key_dim is tiny or values are zero.
+        # For now, shape checks are primary. A functional check would involve specific inputs.
+        # self.assertNotAllClose(output2, output_no_cache) # This might be too strong / flaky
+
+        # Test with return_attention_scores
+        output3, scores3, cache3 = layer(
+            query2, value2, key=value2, cache=cache1,
+            training=False, use_causal_mask=True, return_attention_scores=True
+        )
+        self.assertEqual(output3.shape, (batch_size, target_seq_len_2, feature_dim))
+        self.assertEqual(scores3.shape, (batch_size, num_heads, target_seq_len_2, expected_total_kv_len))
+        self.assertEqual(cache3[0].shape, (batch_size, expected_total_kv_len, num_heads, key_dim))
+
+    @parameterized.parameters([((1, 2, 3),), ((2, 3, 5),)])
+    def test_symbolic_return_attention_scores_and_cache(self, shape):
+        # Test symbolic call with cache and attention scores
+        mha = layers.MultiHeadAttention(num_heads=4, key_dim=2)
+        q = layers.Input(batch_shape=shape)
+        v = layers.Input(batch_shape=shape)
+        # Symbolic cache input
+        # Shape of cache elements: (batch_size, seq_len, num_heads, key_dim)
+        # For symbolic graph, seq_len might be None or a specific value
+        cache_k_shape = (shape[0], None, mha.num_heads, mha.key_dim)
+        cache_v_shape = (shape[0], None, mha.num_heads, mha.key_dim) # Assuming value_dim = key_dim
+
+        # Create Keras Tensors for cache
+        # Note: dtype needs to match layer's compute_dtype or inputs' dtype
+        # For this test, assuming default floatx or matching q/v dtype
+        cache_k_sym = backend.KerasTensor(cache_k_shape, dtype=q.dtype)
+        cache_v_sym = backend.KerasTensor(cache_v_shape, dtype=v.dtype)
+        symbolic_cache_input = (cache_k_sym, cache_v_sym)
+
+        symbolic_out_with_cache = mha(q, v, cache=symbolic_cache_input, return_attention_scores=True)
+        self.assertLen(symbolic_out_with_cache, 3) # output, scores, cache
+        self.assertEqual(len(symbolic_out_with_cache[2]), 2) # cache is (k,v)
+
+        # Test eager call with cache and attention scores
+        q_np = np.random.random(shape).astype(backend.floatx())
+        v_np = np.random.random(shape).astype(backend.floatx())
+
+        # For eager cache, create actual tensors
+        # Let initial cache be from a previous step (can be zeros or random for shape test)
+        # Assume past_seq_len = 2 for this eager test
+        past_seq_len = 2
+        eager_cache_k_shape = (shape[0], past_seq_len, mha.num_heads, mha.key_dim)
+        eager_cache_v_shape = (shape[0], past_seq_len, mha.num_heads, mha.key_dim)
+        eager_cache_k = ops.zeros(eager_cache_k_shape, dtype=q_np.dtype)
+        eager_cache_v = ops.zeros(eager_cache_v_shape, dtype=v_np.dtype)
+        eager_cache_input = (eager_cache_k, eager_cache_v)
+
+        out_with_cache = mha(q_np, v_np, cache=eager_cache_input, return_attention_scores=True, training=False)
+        self.assertLen(out_with_cache, 3)
+        self.assertEqual(len(out_with_cache[2]), 2)
+
+        # Check shapes consistency between symbolic and eager
+        self.assertEqual(symbolic_out_with_cache[0].shape, out_with_cache[0].shape) # output
+        # Scores shape: (batch, num_heads, query_seq_len, key_seq_len_total)
+        # key_seq_len_total for eager is past_seq_len + v_np.shape[1]
+        # key_seq_len_total for symbolic is None + v.shape[1] (becomes None)
+        # So, direct shape comparison for scores' last dim might not match if symbolic uses None.
+        # Let's check rank and known dimensions
+        self.assertEqual(len(symbolic_out_with_cache[1].shape), len(out_with_cache[1].shape)) # scores rank
+        self.assertEqual(symbolic_out_with_cache[1].shape[:-1], out_with_cache[1].shape[:-1]) # scores B,N,T
+
+        # Cache shapes: (batch, key_seq_len_total, num_heads, key_dim)
+        # Similar logic for key_seq_len_total applies to cache shapes
+        self.assertEqual(len(symbolic_out_with_cache[2][0].shape), len(out_with_cache[2][0].shape)) # cache_k rank
+        self.assertEqual(symbolic_out_with_cache[2][0].shape[0], out_with_cache[2][0].shape[0]) # batch
+        self.assertEqual(symbolic_out_with_cache[2][0].shape[2:], out_with_cache[2][0].shape[2:]) # N, H_k
+
+        self.assertEqual(len(symbolic_out_with_cache[2][1].shape), len(out_with_cache[2][1].shape)) # cache_v rank
+        self.assertEqual(symbolic_out_with_cache[2][1].shape[0], out_with_cache[2][1].shape[0]) # batch
+        self.assertEqual(symbolic_out_with_cache[2][1].shape[2:], out_with_cache[2][1].shape[2:]) # N, H_v

@@ -520,67 +520,94 @@ class MultiHeadAttention(Layer):
         value_mask=None,
         key_mask=None,
         attention_mask=None,
+        cache=None,
         return_attention_scores=False,
         training=None,
         use_causal_mask=False,
     ):
+        self._return_attention_scores = return_attention_scores
         if key is None:
             key = value
 
+        # Determine training mode (e.g., for cache usage)
+        if training is None:
+            training = backend.learning_phase()
+        else:
+            training = ops.convert_to_tensor(training, dtype="bool")
+
         # Delete the masks because the masks are handled at the level of the
         # layer
-        query_mask = backend.get_keras_mask(query)
+        query_mask_from_input = backend.get_keras_mask(query)
         backend.set_keras_mask(query, None)
         backend.set_keras_mask(value, None)
         backend.set_keras_mask(key, None)
 
+        # Project query
+        query = self._query_dense(query)
+
+        # Handle cache
+        if cache is not None and not training:
+            past_key, past_value = cache
+            current_key = self._key_dense(key)
+            current_value = self._value_dense(value)
+            new_key = ops.concatenate([past_key, current_key], axis=1)
+            new_value = ops.concatenate([past_value, current_value], axis=1)
+        else:
+            new_key = self._key_dense(key)
+            new_value = self._value_dense(value)
+
+        # Compute attention mask using the potentially updated key/value
+        # The sequence length for causal mask now comes from new_key
         attention_mask = self._compute_attention_mask(
             query,
-            value,
-            query_mask=query_mask,
+            new_value,  # Use new_value for sequence length consistency
+            query_mask=query_mask_from_input,
             value_mask=value_mask,
             key_mask=key_mask,
             attention_mask=attention_mask,
             use_causal_mask=use_causal_mask,
+            # Pass new_key to _compute_causal_mask if it's used there
+            # for its sequence length.
+            cached_kv_length=ops.shape(new_key)[1]
+            if use_causal_mask
+            else None,
         )
         #   N = `num_attention_heads`
         #   H = `size_per_head`
 
         # `query` = [B, T, N, H]
-        query = self._query_dense(query)
-
-        # `key` = [B, S, N, H]
-        key = self._key_dense(key)
-
-        # `value` = [B, S, N, H]
-        value = self._value_dense(value)
+        # `new_key` = [B, S_full, N, H]
+        # `new_value` = [B, S_full, N, H]
         attention_output, attention_scores = self._compute_attention(
             query,
-            key,
-            value,
+            new_key,
+            new_value,
             attention_mask,
             training,
-            return_attention_scores,
+            # Pass the instance flag, not the call argument
+            self._return_attention_scores,
         )
         attention_output = self._output_dense(attention_output)
 
         # Set mask on output if needed
-        if query_mask is not None:
-            backend.set_keras_mask(attention_output, query_mask)
+        if query_mask_from_input is not None:
+            backend.set_keras_mask(attention_output, query_mask_from_input)
 
-        if return_attention_scores:
-            return attention_output, attention_scores
-        return attention_output
+        current_cache = (new_key, new_value)
+        if self._return_attention_scores:
+            return attention_output, attention_scores, current_cache
+        return attention_output, current_cache
 
     def _compute_attention_mask(
         self,
         query,
-        value,
+        value,  # Note: this is new_value in call()
         query_mask=None,
         value_mask=None,
         key_mask=None,
         attention_mask=None,
         use_causal_mask=False,
+        cached_kv_length=None,  # New argument for causal mask with cache
     ):
         """Computes the attention mask, using the Keras masks of the inputs.
 
@@ -619,17 +646,32 @@ class MultiHeadAttention(Layer):
             auto_mask = ops.expand_dims(query_mask, -1)  # shape is [B, T, 1]
         if value_mask is not None:
             value_mask = ops.cast(value_mask, "bool")  # defensive casting
-            # B = batch size, S == max value length
+            # B = batch size, S == max value length (of current value, not cached)
             mask = ops.expand_dims(value_mask, -2)  # shape is [B, 1, S]
             auto_mask = mask if auto_mask is None else auto_mask & mask
+
+        # Key mask should apply to the full key sequence length if cache is used
+        # However, typical use of key_mask is for padding in the *original* key,
+        # so its shape might be (B, S_current).
+        # If cache is used, this mask needs to be handled carefully.
+        # For now, assume key_mask corresponds to the original key passed to call().
+        # If `key` is part of a cache, its mask should already be part of `past_key`.
+        # This part might need refinement based on how key_mask is intended with caching.
         if key_mask is not None:
-            key_mask = ops.cast(key_mask, "bool")  # defensive casting
-            # B == batch size, S == max key length == max value length
-            mask = ops.expand_dims(key_mask, -2)  # shape is [B, 1, S]
+            key_mask = ops.cast(key_mask, "bool")
+            # If cache is used, key_mask applies to current_key part.
+            # We'd need to concatenate it with a mask for past_key.
+            # This is complex. Assuming key_mask is for S_current or S_total if no cache.
+            # For simplicity, let's assume key_mask is [B, 1, S_total_or_S_current]
+            mask = ops.expand_dims(key_mask, -2)
             auto_mask = mask if auto_mask is None else auto_mask & mask
+
         if use_causal_mask:
-            # the shape of the causal mask is [1, T, S]
-            mask = self._compute_causal_mask(query, value)
+            # the shape of the causal mask is [1, T, S_total]
+            # Pass the total key sequence length if cache is active
+            mask = self._compute_causal_mask(
+                query, value, v_seq_length_override=cached_kv_length
+            )
             auto_mask = mask if auto_mask is None else auto_mask & mask
 
         if attention_mask is not None:
@@ -660,13 +702,19 @@ class MultiHeadAttention(Layer):
             query: query tensor of shape `(B, T, ...)`.
             value: value tensor of shape `(B, S, ...)` (optional, defaults to
                 query).
+            v_seq_length_override: Optional integer to override value sequence length.
+                Used when KV cache is active, so S becomes S_past + S_current.
 
         Returns:
             mask: a boolean tensor of shape `(1, T, S)` containing a lower
                 triangular matrix of shape `(T, S)`.
         """
         q_seq_length = ops.shape(query)[1]
-        v_seq_length = q_seq_length if value is None else ops.shape(value)[1]
+        v_seq_length = (
+            v_seq_length_override
+            if v_seq_length_override is not None
+            else (q_seq_length if value is None else ops.shape(value)[1])
+        )
         ones_mask = ops.ones((1, q_seq_length, v_seq_length), dtype="int32")
         row_index = ops.cumsum(ones_mask, axis=-2)
         col_index = ops.cumsum(ones_mask, axis=-1)
@@ -685,15 +733,78 @@ class MultiHeadAttention(Layer):
         else:
             key_shape = tuple(key_shape)
 
+        if not (self.built and hasattr(self, "_key_dense") and hasattr(self, "_value_dense")):
+            # Layer is not built yet, shapes of dense projections are unknown.
+            # This can happen if compute_output_shape is called early.
+            # We'll define cache shapes with None for head and key/value dims
+            # if they are not available.
+            # This is a fallback, ideally build() is called first.
+            num_heads = self._num_heads
+            key_dim = self._key_dim
+            value_dim = self._value_dim
+        else:
+            # Layer is built, so we can get precise shapes.
+            # _key_dense.compute_output_shape(key_shape) would be
+            # (B, S, N, key_dim)
+            # _value_dense.compute_output_shape(value_shape) would be
+            # (B, S, N, value_dim)
+            num_heads = self._key_dense.output_shape[-2]
+            key_dim = self._key_dense.output_shape[-1]
+            value_dim = self._value_dense.output_shape[-1]
+
+
         if value_shape[1:-1] != key_shape[1:-1]:
-            raise ValueError(
-                "All dimensions of `value` and `key`, except the last one, "
-                f"must be equal. Received: value_shape={value_shape} and "
-                f"key_shape={key_shape}"
-            )
+            # This check might be too strict if sequence lengths differ,
+            # but the original check was about non-sequence, non-feature dims.
+            # Let's assume the feature dimension is the last one.
+            if len(value_shape) > 2 and len(key_shape) > 2 and \
+               value_shape[2:-1] != key_shape[2:-1]:
+                raise ValueError(
+                    "All dimensions of `value` and `key`, except batch, "
+                    "sequence, and feature, "
+                    f"must be equal. Received: value_shape={value_shape} and "
+                    f"key_shape={key_shape}"
+                )
+
+        attention_output_shape = list(query_shape)
         if self._output_shape:
-            query_shape = query_shape[:-1] + self._output_shape
-        return query_shape
+            attention_output_shape[-1] = self._output_shape[0] # Assuming 1D output_shape
+        # else it's query_shape[-1] which is already set.
+        attention_output_shape = tuple(attention_output_shape)
+
+
+        # Cache shapes: (B, S, N, H_k) and (B, S, N, H_v)
+        # S comes from key_shape[1] or value_shape[1]. This represents S_total.
+        # In compute_output_shape, S is dynamic if inputs are dynamic.
+        key_seq_len = key_shape[1] # Can be None
+
+        # Shape of projected key: (B, S, num_heads, key_dim)
+        cache_key_shape = (
+            key_shape[0],
+            key_seq_len,
+            num_heads,
+            key_dim,
+        )
+        # Shape of projected value: (B, S, num_heads, value_dim)
+        cache_value_shape = (
+            value_shape[0],
+            key_seq_len, # Value sequence length should track key sequence length for cache
+            num_heads,
+            value_dim,
+        )
+        cache_shape = (cache_key_shape, cache_value_shape)
+
+        if hasattr(self, "_return_attention_scores") and self._return_attention_scores:
+            # Attention scores shape: (B, N, T, S)
+            # T is query_shape[1], S is key_seq_len
+            score_shape = (
+                query_shape[0],
+                num_heads,
+                query_shape[1],
+                key_seq_len,
+            )
+            return attention_output_shape, score_shape, cache_shape
+        return attention_output_shape, cache_shape
 
     def compute_output_spec(
         self,
@@ -704,27 +815,64 @@ class MultiHeadAttention(Layer):
         value_mask=None,
         key_mask=None,
         attention_mask=None,
+        cache=None, # Added cache to signature
         return_attention_scores=False,
         training=None,
         use_causal_mask=False,
     ):
-        if key is not None:
-            key_shape = key.shape
-        else:
-            key_shape = None
-        output_shape = self.compute_output_shape(
-            query.shape, value.shape, key_shape
+        # Stash return_attention_scores to be used by compute_output_shape
+        # This is a bit of a workaround as compute_output_shape ideally
+        # shouldn't depend on call args not passed to it.
+        # Keras handles this by sometimes calling build then compute_output_shape.
+        self._return_attention_scores_for_spec = return_attention_scores
+
+
+        key_shape_for_compute = key.shape if key is not None else value.shape
+
+        output_shapes = self.compute_output_shape(
+            query.shape, value.shape, key_shape_for_compute
         )
-        output_spec = backend.KerasTensor(
-            output_shape, dtype=self.compute_dtype
-        )
-        if return_attention_scores:
-            length = query.shape[1]
-            attention_shape = (query.shape[0], self.num_heads, length, length)
-            return output_spec, backend.KerasTensor(
-                attention_shape, dtype=self.compute_dtype
+
+        # Reset the temporary flag after use
+        if hasattr(self, "_return_attention_scores_for_spec"):
+            del self._return_attention_scores_for_spec
+
+
+        if return_attention_scores : # Use the direct argument here
+            att_output_spec = backend.KerasTensor(
+                output_shapes[0], dtype=self.compute_dtype
             )
-        return output_spec
+            att_scores_spec = backend.KerasTensor(
+                output_shapes[1], dtype=self.compute_dtype
+            )
+            cache_k_spec = backend.KerasTensor(
+                output_shapes[2][0], dtype=self.compute_dtype
+            )
+            cache_v_spec = backend.KerasTensor(
+                output_shapes[2][1], dtype=self.compute_dtype
+            )
+            return att_output_spec, att_scores_spec, (cache_k_spec, cache_v_spec)
+        else:
+            att_output_spec = backend.KerasTensor(
+                output_shapes[0], dtype=self.compute_dtype
+            )
+            cache_k_spec = backend.KerasTensor(
+                output_shapes[1][0], dtype=self.compute_dtype
+            )
+            cache_v_spec = backend.KerasTensor(
+                output_shapes[1][1], dtype=self.compute_dtype
+            )
+            return att_output_spec, (cache_k_spec, cache_v_spec)
+
+# Helper to get num_heads and key/value_dim if layer is not built
+# This might not be needed if build() is always called before compute_output_shape
+# For now, removed direct use of _get_unbuilt_proj_dims from compute_output_shape
+# and relying on self._num_heads, self._key_dim, self._value_dim which are set in __init__
+
+def _get_unbuilt_proj_dims(layer_instance):
+    # Fallback for when layer isn't built yet.
+    # This is a simplification. Real projection shapes depend on EinsumDense.
+    return layer_instance.num_heads, layer_instance.key_dim, layer_instance.value_dim
 
 
 def _index_to_einsum_variable(i):

@@ -306,58 +306,49 @@ def keras_home():
 
 # Attempt to read Keras config file.
 _config_path = os.path.expanduser(os.path.join(_KERAS_DIR, "keras.json"))
+_initial_nnx_value_from_config = False # Safe default before reading config
+
 if os.path.exists(_config_path):
     try:
         with open(_config_path) as f:
             _config = json.load(f)
     except ValueError:
-        _config = {}
+        _config = {} # Default empty config if JSON is invalid
     _floatx = _config.get("floatx", floatx())
     assert _floatx in {"float16", "float32", "float64"}
     _epsilon = _config.get("epsilon", epsilon())
     assert isinstance(_epsilon, float)
-    _backend = _config.get("backend", _BACKEND)
+    _temp_backend = _config.get("backend", _BACKEND) # Read backend from json, use global _BACKEND as default
     _image_data_format = _config.get("image_data_format", image_data_format())
     assert _image_data_format in {"channels_last", "channels_first"}
-    _nnx_enabled_json = _config.get(_NNX_ENABLED_KEY, is_nnx_backend_enabled())
-    if not isinstance(_nnx_enabled_json, bool):
-        _nnx_enabled_json = str(_nnx_enabled_json).lower() == "true"
 
+    # Get nnx_enabled from JSON, default to False. No call to is_nnx_backend_enabled() here.
+    _initial_nnx_value_from_config = _config.get(_NNX_ENABLED_KEY, False)
+    if not isinstance(_initial_nnx_value_from_config, bool):
+        _initial_nnx_value_from_config = str(_initial_nnx_value_from_config).lower() == "true"
+
+    # Apply basic configs that don't cause cycles
     set_floatx(_floatx)
     set_epsilon(_epsilon)
     set_image_data_format(_image_data_format)
-    set_nnx_backend_enabled(_nnx_enabled_json)
-    _BACKEND = _backend
+    _BACKEND = _temp_backend # Set global _BACKEND from json content (or its default if not in json)
+else:
+    _config = {} # Ensure _config is defined if file doesn't exist
+    # _initial_nnx_value_from_config remains False if no config file
 
-# Save config file, if possible.
-if not os.path.exists(_KERAS_DIR):
-    try:
-        os.makedirs(_KERAS_DIR)
-    except OSError:
-        # Except permission denied and potential race conditions
-        # in multi-threaded environments.
-        pass
-
-if not os.path.exists(_config_path):
-    _config = {
-        "floatx": floatx(),
-        "epsilon": epsilon(),
-        "backend": _BACKEND,
-        "image_data_format": image_data_format(),
-        _NNX_ENABLED_KEY: is_nnx_backend_enabled(),
-    }
-    try:
-        with open(_config_path, "w") as f:
-            f.write(json.dumps(_config, indent=4))
-    except IOError:
-        # Except permission denied.
-        pass
-
-# Set backend based on KERAS_BACKEND flag, if applicable.
+# Override backend if KERAS_BACKEND env var is set (it has higher precedence)
 if "KERAS_BACKEND" in os.environ:
-    _backend = os.environ["KERAS_BACKEND"]
-    if _backend:
-        _BACKEND = _backend
+    _env_backend = os.environ["KERAS_BACKEND"]
+    if _env_backend: # Ensure env var is not empty
+        _BACKEND = _env_backend
+
+# Now that _BACKEND is definitively set (from default, json, or env var),
+# and config.py is further along its initialization, set the NNX enabled status.
+# The import of global_state within set_nnx_backend_enabled will now happen,
+# but it should be safer as config.py is more completely initialized.
+
+
+# Set Keras configuration environment variables
 if "KERAS_MAX_EPOCHS" in os.environ:
     _MAX_EPOCHS = int(os.environ["KERAS_MAX_EPOCHS"])
 if "KERAS_MAX_STEPS_PER_EPOCH" in os.environ:
@@ -459,3 +450,37 @@ def max_steps_per_epoch():
             `None`, no limit is applied.
     """
     return _MAX_STEPS_PER_EPOCH
+
+
+# Set NNX backend enabled status after all other initializations,
+# including the definition of the `backend()` function.
+# This helps prevent circular import issues.
+
+# Save config file if it didn't exist, or if we created _KERAS_DIR.
+# This is placed late to ensure functions like is_nnx_backend_enabled()
+# can be called without causing circular imports if they depend on
+# fully initialized modules.
+if not os.path.exists(_KERAS_DIR):
+    try:
+        os.makedirs(_KERAS_DIR)
+    except OSError:
+        # Except permission denied and potential race conditions
+        pass
+
+if not os.path.exists(_config_path):
+    _current_nnx_status_for_saving = is_nnx_backend_enabled()
+    _config_to_save = {
+        "floatx": floatx(),
+        "epsilon": epsilon(),
+        "backend": _BACKEND, # Use the final _BACKEND value
+        "image_data_format": image_data_format(),
+        _NNX_ENABLED_KEY: _current_nnx_status_for_saving,
+    }
+    try:
+        with open(_config_path, "w") as f:
+            f.write(json.dumps(_config_to_save, indent=4))
+    except IOError:
+        # Except permission denied.
+        pass
+
+set_nnx_backend_enabled(_initial_nnx_value_from_config)

@@ -6,6 +6,8 @@ import numpy as np
 from flax import nnx
 
 from keras.src import tree
+from keras.src.backend.config import is_nnx_backend_enabled
+from keras.src.layers.layer import Layer
 from keras.src.backend.common import KerasVariable
 from keras.src.backend.common import global_state
 from keras.src.backend.common import standardize_dtype
@@ -418,7 +420,13 @@ def compute_output_spec(fn, *args, **kwargs):
 
                 i += 1
             with StatelessScope():
-                return fn(*rec_args, **kwargs, **static_kwargs)
+                # We use 'fn_obj' to avoid modifying the 'fn' parameter of the outer scope directly
+                # if 'fn' is passed by value. If 'fn' is an object and passed by reference,
+                # this local reassignment is fine.
+                current_fn_to_call = fn
+                if is_nnx_backend_enabled() and isinstance(current_fn_to_call, Layer):
+                    current_fn_to_call = nnx.clone(current_fn_to_call)
+                return current_fn_to_call(*rec_args, **kwargs, **static_kwargs)
 
         if has_none:
             ms_args_1, ms_kwargs_1 = tree.map_structure(

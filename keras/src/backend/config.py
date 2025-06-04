@@ -459,4 +459,12 @@ if not os.path.exists(_config_path):
         # Except permission denied.
         pass
 
+if "KERAS_NNX_ENABLED" in os.environ:
+    env_val = os.environ["KERAS_NNX_ENABLED"].lower()
+    if env_val == "true":
+        _initial_nnx_value_from_config = True
+    elif env_val == "false":
+        _initial_nnx_value_from_config = False
+    # else: keep the value from keras.json or default if env var is not "true" or "false"
+
 set_nnx_backend_enabled(_initial_nnx_value_from_config)

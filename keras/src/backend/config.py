@@ -460,3 +460,13 @@ if not os.path.exists(_config_path):
         pass
 
 set_nnx_backend_enabled(_initial_nnx_value_from_config)
+
+if _BACKEND == "jax" and "KERAS_JAX_NNX_BACKEND" in os.environ:
+    nnx_env_value = os.environ["KERAS_JAX_NNX_BACKEND"].lower()
+    if nnx_env_value == "true":
+        set_nnx_backend_enabled(True)
+    elif nnx_env_value == "false":
+        set_nnx_backend_enabled(False)
+    else:
+        # Optionally, print a warning for unrecognized values
+        print(f"Warning: Unrecognized value for KERAS_JAX_NNX_BACKEND: {os.environ['KERAS_JAX_NNX_BACKEND']}")

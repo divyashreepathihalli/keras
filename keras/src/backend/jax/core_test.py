@@ -78,6 +78,75 @@ class JaxNnxFlagTest(testing.TestCase):
         keras.config.disable_nnx_backend()
         super().tearDown()
 
+    def test_nnx_variable_creation_with_env_var(self):
+        import importlib  # Moved import here to be specific to this test
+
+        original_keras_backend = os.environ.get("KERAS_BACKEND")
+        original_keras_jax_nnx_backend = os.environ.get(
+            "KERAS_JAX_NNX_BACKEND"
+        )
+
+        os.environ["KERAS_BACKEND"] = "jax"
+        os.environ["KERAS_JAX_NNX_BACKEND"] = "True"
+
+        # Modules that need to be reloaded to reflect env var changes
+        from keras.src import config as keras_config
+        from keras.src.backend.jax import (
+            __init__ as keras_jax_init,
+        ) # Handles Variable aliasing
+        from keras.src import backend as keras_src_backend
+        # keras module itself to update keras.Variable
+        import keras as top_level_keras
+
+        modules_to_reload = [
+            keras_config,
+            keras_jax_init,
+            keras_src_backend,
+            top_level_keras,
+        ]
+
+        for module in modules_to_reload:
+            importlib.reload(module)
+
+        try:
+            self.assertEqual(keras.config.backend(), "jax")
+            self.assertTrue(keras.config.is_nnx_backend_enabled())
+
+            # Local import for NnxVariable if not already at top or ensure it's the reloaded one
+            from keras.src.backend.jax.core import NnxVariable
+
+            variable = keras.Variable(jnp.array(1.0))
+            self.assertIsInstance(variable, NnxVariable)
+
+            # Test nnx.split and nnx.merge logic
+            graphdef, state = nnx.split(variable)
+            state = jax.tree.map(lambda x: x + 1, state)
+            variable2 = nnx.merge(graphdef, state)
+
+            self.assertEqual(variable2.value, 2.0)
+            # For NnxVariable, _value should be the same as value property
+            self.assertEqual(variable2._value, variable2.value)
+
+        finally:
+            # Restore original environment variables
+            if original_keras_backend is None:
+                if "KERAS_BACKEND" in os.environ:
+                    del os.environ["KERAS_BACKEND"]
+            else:
+                os.environ["KERAS_BACKEND"] = original_keras_backend
+
+            if original_keras_jax_nnx_backend is None:
+                if "KERAS_JAX_NNX_BACKEND" in os.environ:
+                    del os.environ["KERAS_JAX_NNX_BACKEND"]
+            else:
+                os.environ[
+                    "KERAS_JAX_NNX_BACKEND"
+                ] = original_keras_jax_nnx_backend
+
+            # Reload modules again to revert to original state based on restored env vars
+            for module in modules_to_reload:
+                importlib.reload(module)
+
     def test_variable_selection_based_on_nnx_flag(self):
         # Test with NNX backend enabled
         keras.config.enable_nnx_backend()

@@ -62,3 +62,79 @@ class JaxCoreVariableTest(testing.TestCase):
         state = jax.tree.map(lambda x: x + 1, state)
         variable2 = nnx.merge(graphdef, state)
         self.assertEqual(variable2._value, variable2.value)
+
+    def test_nnx_variable_shape_and_dtype_provided(self):
+        if not keras.config.is_nnx_backend_enabled():
+            self.skipTest("NNX backend is not enabled")
+        var = keras.src.backend.jax.core.Variable(
+            initializer=lambda s, d: jnp.zeros(s, dtype=d),
+            shape=(2, 2),
+            dtype="int32",
+        )
+        self.assertEqual(keras.src.backend.common.standardize_dtype(var.dtype), "int32")
+        self.assertEqual(var.path, "variable") # Default name
+
+    def test_nnx_variable_shape_provided_dtype_none_uses_floatx(self):
+        if not keras.config.is_nnx_backend_enabled():
+            self.skipTest("NNX backend is not enabled")
+        original_floatx = keras.config.floatx()
+        keras.config.set_floatx("float64")
+        try:
+            var = keras.src.backend.jax.core.Variable(
+                initializer=lambda s, d: jnp.zeros(s, dtype=d),
+                shape=(2, 2),
+                dtype=None,
+                name="test_var_float64",
+            )
+            self.assertEqual(keras.src.backend.common.standardize_dtype(var.dtype), "float64")
+            self.assertEqual(var.path, "test_var_float64")
+        finally:
+            keras.config.set_floatx(original_floatx)
+
+    def test_nnx_variable_shape_none_dtype_provided(self):
+        if not keras.config.is_nnx_backend_enabled():
+            self.skipTest("NNX backend is not enabled")
+        var = keras.src.backend.jax.core.Variable(
+            initializer=lambda s, d: jnp.array(0, dtype=d),
+            shape=None,
+            dtype="bfloat16",
+            name="test_var_bfloat16",
+        )
+        self.assertEqual(keras.src.backend.common.standardize_dtype(var.dtype), "bfloat16")
+        self.assertEqual(var.shape, ())
+        self.assertEqual(var.path, "test_var_bfloat16")
+
+
+    def test_nnx_variable_shape_none_dtype_none_uses_floatx(self):
+        if not keras.config.is_nnx_backend_enabled():
+            self.skipTest("NNX backend is not enabled")
+        original_floatx = keras.config.floatx()
+        keras.config.set_floatx("float16")
+        try:
+            var = keras.src.backend.jax.core.Variable(
+                initializer=lambda s, d: jnp.array(0, dtype=d),
+                shape=None,
+                dtype=None,
+                name="test_var_float16",
+            )
+            self.assertEqual(keras.src.backend.common.standardize_dtype(var.dtype), "float16")
+            self.assertEqual(var.shape, ())
+            self.assertEqual(var.path, "test_var_float16")
+        finally:
+            keras.config.set_floatx(original_floatx)
+
+    def test_nnx_variable_initializer_defines_dtype(self):
+        if not keras.config.is_nnx_backend_enabled():
+            self.skipTest("NNX backend is not enabled")
+        # This test ensures that KerasVariable's dtype inference from initializer
+        # correctly overrides the placeholder's initial floatx dtype.
+        initializer = lambda s, d: jnp.array(0, dtype=jnp.int8)
+        var = keras.src.backend.jax.core.Variable(
+            initializer=initializer,
+            shape=(), # Explicitly scalar shape
+            dtype=None, # No dtype override
+            name="test_var_int8_inferred"
+        )
+        self.assertEqual(keras.src.backend.common.standardize_dtype(var.dtype), "int8")
+        self.assertEqual(var.shape, ())
+        self.assertEqual(var.path, "test_var_int8_inferred")

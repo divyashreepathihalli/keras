@@ -95,18 +95,27 @@ if config.is_nnx_backend_enabled():
                     nnx_metadata["mutable"] = actual_nnx_mutable
 
                 # Initialize nnx.Variable first.
-                if shape is not None and dtype is not None:
-                    # If initializer is a Keras callable, it's not ready yet.
-                    # If initializer is already a value, KerasVariable will
-                    # handle it. We need a concrete array for the placeholder.
-                    _placeholder_value = jnp.zeros(
-                        shape, dtype=standardize_dtype(dtype)
-                    )
-                elif shape is not None:
-                    _placeholder_value = jnp.zeros(shape, dtype=jnp.float32)
-                else:
-                    _placeholder_value = jnp.array(0.0, dtype=jnp.float32)
+                # Determine the dtype for the placeholder.
+                # If dtype is explicitly provided, use it. Otherwise, default to Keras' config.floatx().
+                _placeholder_value = None
+                if shape is not None:
+                    if dtype is not None:
+                        # Shape and dtype provided
+                        _placeholder_value = jnp.zeros(shape, dtype=standardize_dtype(dtype))
+                    else:
+                        # Shape provided, dtype is None; use Keras default float type
+                        _placeholder_value = jnp.zeros(shape, dtype=standardize_dtype(config.floatx()))
+                else:  # shape is None
+                    if dtype is not None:
+                        # Shape is None, dtype provided
+                        _placeholder_value = jnp.array(0.0, dtype=standardize_dtype(dtype))
+                    else:
+                        # Shape is None, dtype is None; use Keras default float type
+                        _placeholder_value = jnp.array(0.0, dtype=standardize_dtype(config.floatx()))
 
+                # Note: Sharding is not applied to _placeholder_value directly.
+                # It is handled later via self._layout during the KerasVariable
+                # initialization (_initialize -> _direct_assign).
                 # Call nnx.Variable.__init__ directly.
                 nnx.Variable.__init__(
                     self, value=_placeholder_value, **nnx_metadata

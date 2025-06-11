@@ -1549,8 +1549,9 @@ class Layer(BackendLayer, Operation, KerasSaveable):
             # Tracking it might be benign or unnecessary. Let's keep Keras's original tracking logic.
             value = self._tracker.track(value)
 
-        # NNX-specific bypass for `_called` attribute
-        if backend.backend() == "jax" and is_nnx_backend_enabled() and name == "_called":
+        # NNX-specific bypass for `_called` and `built` attributes
+        if backend.backend() == "jax" and is_nnx_backend_enabled() and \
+           (name == "_called" or name == "built"): # Modified condition
             object.__setattr__(self, name, value)
             return
 

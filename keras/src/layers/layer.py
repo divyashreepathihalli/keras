@@ -1533,12 +1533,28 @@ class Layer(BackendLayer, Operation, KerasSaveable):
 
     def __setattr__(self, name, value):
         # Track Variables, Layers, Metrics, SeedGenerators.
-        name, value = self._setattr_hook(name, value)
-        if name != "_tracker":
+        # The _setattr_hook is specific to TF/Torch and might not exist or be a no-op for JAX/NNX.
+        # We assume it's handled by the specific BackendLayer or is safely callable.
+        if hasattr(self, "_setattr_hook"): # Check if _setattr_hook exists
+            name, value = self._setattr_hook(name, value)
+        else:
+            # Default behavior if no _setattr_hook, common for JAX/NNX
+            pass
+
+
+        if name != "_tracker": # Keras internal tracking logic
             if not hasattr(self, "_tracker"):
                 self._initialize_tracker()
+            # The `_called` attribute is a boolean, not typically a Keras-tracked object.
+            # Tracking it might be benign or unnecessary. Let's keep Keras's original tracking logic.
             value = self._tracker.track(value)
-        return super().__setattr__(name, value)
+
+        # NNX-specific bypass for `_called` attribute
+        if backend.backend() == "jax" and is_nnx_backend_enabled() and name == "_called":
+            object.__setattr__(self, name, value)
+            return
+
+        super().__setattr__(name, value) # Default path, including for NnxLayer -> nnx.Module
 
     def __delattr__(self, name):
         obj = getattr(self, name)

@@ -38,7 +38,6 @@ from keras.src.backend.common.keras_tensor import any_symbolic_tensors
 from keras.src.backend.common.name_scope import current_path
 from keras.src.backend.common.remat import get_current_remat_mode
 from keras.src.backend.common.symbolic_scope import in_symbolic_scope
-from keras.src.backend.config import is_nnx_backend_enabled
 from keras.src.distribution import distribution_lib
 from keras.src.dtype_policies import DTypePolicyMap
 from keras.src.layers import input_spec
@@ -54,10 +53,7 @@ from keras.src.utils import tracking
 if backend.backend() == "tensorflow":
     from keras.src.backend.tensorflow.layer import TFLayer as BackendLayer
 elif backend.backend() == "jax":
-    if is_nnx_backend_enabled():
-        from keras.src.backend.jax.layer import NnxLayer as BackendLayer
-    else:
-        from keras.src.backend.jax.layer import JaxLayer as BackendLayer
+    from keras.src.backend.jax.layer import JaxLayer as BackendLayer
 elif backend.backend() == "torch":
     from keras.src.backend.torch.layer import TorchLayer as BackendLayer
 elif backend.backend() == "numpy":
@@ -222,11 +218,9 @@ class Layer(BackendLayer, Operation, KerasSaveable):
     ```
     """
 
-    def __init_subclass__(cls):
-        super().__init_subclass__()
-
     def __new__(cls, *args, **kwargs):
         obj = super().__new__(cls, *args, **kwargs)
+
         # Wrap the user-provided `build` method in the `build_wrapper`
         # to add name scope support and serialization support.
         original_build_method = obj.build
@@ -1539,19 +1533,7 @@ class Layer(BackendLayer, Operation, KerasSaveable):
             if not hasattr(self, "_tracker"):
                 self._initialize_tracker()
             value = self._tracker.track(value)
-
-        # NNX-specific bypass for `_called` and `built` attributes
-        if (
-            backend.backend() == "jax"
-            and is_nnx_backend_enabled()
-            and (name == "_called" or name == "built")
-        ):
-            object.__setattr__(self, name, value)
-            return
-
-        super().__setattr__(
-            name, value
-        )  # Default path, including for NnxLayer -> nnx.Module
+        return super().__setattr__(name, value)
 
     def __delattr__(self, name):
         obj = getattr(self, name)

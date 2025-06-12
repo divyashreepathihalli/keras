@@ -1,8 +1,6 @@
 import inspect
 import textwrap
 
-from flax import nnx
-
 from keras.src import backend
 from keras.src import dtype_policies
 from keras.src import tree
@@ -13,6 +11,18 @@ from keras.src.ops.node import Node
 from keras.src.utils import python_utils
 from keras.src.utils import traceback_utils
 from keras.src.utils.naming import auto_name
+
+try:
+    import jax
+
+    if backend.backend() == "jax" and is_nnx_backend_enabled():
+        from flax import nnx
+    else:
+        # Make sure nnx is defined even if not used
+        nnx = None
+except ImportError:
+    jax = None
+    nnx = None
 
 
 @keras_export("keras.Operation")
@@ -124,7 +134,7 @@ class Operation:
         to manually implement `get_config()`.
         """
         instance = super(Operation, cls).__new__(cls)
-        if backend.backend() == "jax" and is_nnx_backend_enabled():
+        if backend.backend() == "jax" and is_nnx_backend_enabled() and nnx is not None:
             vars(instance)["_object__state"] = nnx.object.ObjectState()
         # Generate a config to be returned by default by `get_config()`.
         arg_names = inspect.getfullargspec(cls.__init__).args

@@ -242,6 +242,33 @@ if config.is_nnx_backend_enabled():
 
         @property
         def value(self):
+            # This method provides the public interface for accessing the variable's value.
+            # It handles several NnxVariable-specific and Keras-common concerns:
+            # 1. Initialization: Ensures `self.raw_value` (the NNX source of truth)
+            #    is initialized, typically via `self._initializer` if not already set.
+            #    This is handled by the `if not hasattr(self, "raw_value")` block.
+            # 2. NNX Source of Truth: `self.raw_value` is primary.
+            # 3. NNX Hooks: Applies `on_get_value` hook from `_var_metadata` if present.
+            # 4. Keras Stateless Scope: If in a stateless scope, it attempts to return
+            #    a value from that scope.
+            # 5. Autocasting: Applies `self._maybe_autocast` to the final value.
+            #
+            # Why not call `super().value` (i.e., `KerasVariable.value`)?
+            # - Source of Truth: `KerasVariable.value` typically reads from `self._value`
+            #   (a direct attribute in KerasVariable). In `NnxVariable`, `self._value`
+            #   is a property that itself reads from `self.raw_value`. A naive call to
+            #   `super().value` could lead to recursion if it tries to access `self._value`
+            #   or `self.value`, or it might bypass `raw_value` and the NNX hooks.
+            # - NNX Specifics: The `on_get_value` hook is specific to NNX and must be
+            #   applied to `raw_value` before other Keras common logic like stateless
+            #   scope or autocasting. `KerasVariable.value` is unaware of this hook.
+            # - Replicated Logic: The common logic from `KerasVariable.value` (handling
+            #   stateless scope and autocasting) is already correctly implemented here,
+            #   operating on the NNX-derived value (`current_value` post-hook).
+            #   Replicating this small amount of logic is safer than attempting a complex
+            #   and potentially fragile `super().value` call that would need to be
+            #   carefully wired to use the NNX-processed `raw_value`.
+
             # Ensure raw_value is initialized if it wasn't (e.g. lazy init)
             # NnxVariable._initialize (from JaxVariable) calls _direct_assign, which sets raw_value.
             if not hasattr(self, "raw_value"):

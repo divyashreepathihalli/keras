@@ -1,17 +1,30 @@
-!pip install -q kagglehub
+import subprocess
+import sys
 
-# !pip install -q tensorflow
-# !pip install -q tensorboardX
-!pip install -q grain
-!pip install -q git+https://github.com/abheesht17/tunix.git@keras-tunix-sft
-!pip install -q git+https://github.com/google/qwix
+def _run_pip_install(command):
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + command.split())
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install {command}: {e}")
+        # Decide if you want to raise the error or just print it
+        # raise
 
-# !pip uninstall -q -y flax
-# !pip install -q flax
+_run_pip_install("kagglehub")
 
-# !pip uninstall -q -y keras
-!pip install -q git+https://github.com/divyashreepathihalli/keras.git@nnx
-!pip install -q --upgrade jax
+_run_pip_install("tensorflow") # Ensure TensorFlow is installed
+_run_pip_install("keras-hub") # Ensure KerasHub is installed
+# _run_pip_install("tensorboardX")
+_run_pip_install("grain")
+_run_pip_install("git+https://github.com/abheesht17/tunix.git@keras-tunix-sft")
+_run_pip_install("git+https://github.com/google/qwix")
+
+# # Uninstall commands would need careful handling if run this way
+# # subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-q", "-y", "flax"])
+# _run_pip_install("flax")
+
+# # subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-q", "-y", "keras"])
+_run_pip_install("git+https://github.com/divyashreepathihalli/keras.git@nnx")
+_run_pip_install("--upgrade jax")
 import gc
 import os
 os.environ['JAX_CAPTURED_CONSTANTS_REPORT_FRAMES'] = '-1'
@@ -28,7 +41,11 @@ from flax import nnx
 
 import jax
 import jax.numpy as jnp
+import jax.tree_util
 from jax.typing import ArrayLike
+
+# Import the specific Trainer class that causes issues
+from keras.src.trainers.trainer import Trainer as KerasInternalTrainer
 
 import optax
 from grain import python as grain
@@ -48,6 +65,22 @@ os.environ["KERAS_NNX_ENABLED"] = "true"
 
 import keras
 import keras_hub
+
+# Register KerasInternalTrainer as an opaque PyTree node
+def _keras_internal_trainer_flatten(trainer_instance):
+    """Treats the KerasInternalTrainer instance as opaque. No children."""
+    return (), trainer_instance  # Aux_data is the instance itself
+
+def _keras_internal_trainer_unflatten(trainer_instance_aux, children):
+    """Reconstructs the KerasInternalTrainer from aux_data."""
+    return trainer_instance_aux
+
+jax.tree_util.register_pytree_node(
+    KerasInternalTrainer,
+    _keras_internal_trainer_flatten,
+    _keras_internal_trainer_unflatten
+)
+
 # Data
 BATCH_SIZE = 1
 
@@ -73,7 +106,7 @@ INPUT_TEMPLATE_IT = {
     "prefix": "<start_of_turn>user\nTranslate this into French:\n",
     "suffix": "\n<end_of_turn>\n<start_of_turn>model\n",
 }
-from google.colab import userdata
+# from google.colab import userdata # Not needed as credentials are hardcoded
 
 os.environ["KAGGLE_USERNAME"] = 'divyasss'
 os.environ["KAGGLE_KEY"] = '5530b7417df9081efa79b26f6ed713fb'

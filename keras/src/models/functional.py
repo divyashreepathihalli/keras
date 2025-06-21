@@ -22,9 +22,9 @@ from keras.src.ops.node import Node
 from keras.src.ops.operation import Operation
 from keras.src.saving import serialization_lib
 from keras.src.utils import tracking
-from keras.src import config as keras_config # For nnx_enabled
+from keras.src import backend # Changed for circular import fix
 # Conditionally import nnx to avoid issues if flax is not installed and nnx is not enabled
-if keras_config.nnx_enabled():
+if backend.config.nnx_enabled(): # Changed for circular import fix
     from flax import nnx
 
 
@@ -143,7 +143,7 @@ class Functional(Function, Model):
             self.trainable = trainable
 
         # NNX submodule registration for operations
-        if keras_config.nnx_enabled():
+        if backend.config.nnx_enabled(): # Changed for circular import fix
             self._nnx_functional_operation_prefix = "_keras_nnx_functional_operation_"
             for i, operation in enumerate(self._operations):
                 # Check if operation is an nnx.Module. Keras Layers are.

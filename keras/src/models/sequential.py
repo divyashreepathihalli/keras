@@ -14,9 +14,9 @@ from keras.src.legacy.saving import serialization as legacy_serialization
 from keras.src.models.functional import Functional
 from keras.src.models.model import Model
 from keras.src.saving import serialization_lib
-from keras.src import backend # Changed for circular import fix
+from keras.src.backend import config as backend_config # Changed for import fix
 # Conditionally import nnx to avoid issues if flax is not installed and nnx is not enabled
-if backend.config.nnx_enabled(): # Changed for circular import fix
+if backend_config.nnx_enabled(): # Changed for import fix
     from flax import nnx
 
 
@@ -74,7 +74,7 @@ class Sequential(Model):
         super().__init__(trainable=trainable, name=name)
         self._functional = None
         self._layers = []  # Keras's list of layers
-        if backend.config.nnx_enabled(): # Changed for circular import fix
+        if backend_config.nnx_enabled(): # Changed for import fix
             self._nnx_submodule_prefix = "_keras_nnx_submodule_"
         if layers:
             for layer_to_add in layers: # Renamed to avoid conflict
@@ -126,7 +126,7 @@ class Sequential(Model):
         self._layers.append(layer)
 
         # NNX submodule registration
-        if backend.config.nnx_enabled(): # Changed for circular import fix
+        if backend_config.nnx_enabled(): # Changed for import fix
             # isinstance check for nnx.Module handles cases where nnx might not be imported
             # or if a non-Module object somehow gets here when NNX is enabled.
             if nnx.has_instance(layer) and isinstance(layer, nnx.Module):
@@ -153,7 +153,7 @@ class Sequential(Model):
         layer = self._layers.pop()
 
         # NNX submodule de-registration
-        if backend.config.nnx_enabled(): # Changed for circular import fix
+        if backend_config.nnx_enabled(): # Changed for import fix
             if nnx.has_instance(layer) and isinstance(layer, nnx.Module):
                 # The index of the layer that was just popped (its attribute name)
                 layer_index = len(self._layers)

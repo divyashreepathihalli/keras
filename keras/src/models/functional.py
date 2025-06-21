@@ -22,6 +22,10 @@ from keras.src.ops.node import Node
 from keras.src.ops.operation import Operation
 from keras.src.saving import serialization_lib
 from keras.src.utils import tracking
+from keras.src import config as keras_config # For nnx_enabled
+# Conditionally import nnx to avoid issues if flax is not installed and nnx is not enabled
+if keras_config.nnx_enabled():
+    from flax import nnx
 
 
 class Functional(Function, Model):
@@ -138,7 +142,16 @@ class Functional(Function, Model):
         if trainable is not None:
             self.trainable = trainable
 
-        self._layers = self.layers
+        # NNX submodule registration for operations
+        if keras_config.nnx_enabled():
+            self._nnx_functional_operation_prefix = "_keras_nnx_functional_operation_"
+            for i, operation in enumerate(self._operations):
+                # Check if operation is an nnx.Module. Keras Layers are.
+                # Other Operation types might not be.
+                if nnx.has_instance(operation) and isinstance(operation, nnx.Module):
+                    setattr(self, f"{self._nnx_functional_operation_prefix}{i}", operation)
+
+        self._layers = self.layers # This property iterates _operations
         self.build(None)
         # We will convert directly (to the correct dtype per input).
         self._convert_input_args = False

@@ -14,6 +14,10 @@ from keras.src.legacy.saving import serialization as legacy_serialization
 from keras.src.models.functional import Functional
 from keras.src.models.model import Model
 from keras.src.saving import serialization_lib
+from keras.src import config as keras_config # For nnx_enabled
+# Conditionally import nnx to avoid issues if flax is not installed and nnx is not enabled
+if keras_config.nnx_enabled():
+    from flax import nnx
 
 
 @keras_export(["keras.Sequential", "keras.models.Sequential"])
@@ -69,10 +73,12 @@ class Sequential(Model):
     def __init__(self, layers=None, trainable=True, name=None):
         super().__init__(trainable=trainable, name=name)
         self._functional = None
-        self._layers = []
+        self._layers = []  # Keras's list of layers
+        if keras_config.nnx_enabled():
+            self._nnx_submodule_prefix = "_keras_nnx_submodule_"
         if layers:
-            for layer in layers:
-                self.add(layer, rebuild=False)
+            for layer_to_add in layers: # Renamed to avoid conflict
+                self.add(layer_to_add, rebuild=False)
             self._maybe_rebuild()
 
     def add(self, layer, rebuild=True):
@@ -118,6 +124,16 @@ class Sequential(Model):
             )
 
         self._layers.append(layer)
+
+        # NNX submodule registration
+        if keras_config.nnx_enabled():
+            # isinstance check for nnx.Module handles cases where nnx might not be imported
+            # or if a non-Module object somehow gets here when NNX is enabled.
+            if nnx.has_instance(layer) and isinstance(layer, nnx.Module):
+                layer_index = len(self._layers) - 1
+                setattr(self, f"{self._nnx_submodule_prefix}{layer_index}", layer)
+            # TODO: Consider a warning/error if layer is not nnx.Module when nnx_enabled
+
         if rebuild:
             self._maybe_rebuild()
         else:
@@ -135,6 +151,18 @@ class Sequential(Model):
             layer: layer instance.
         """
         layer = self._layers.pop()
+
+        # NNX submodule de-registration
+        if keras_config.nnx_enabled():
+            if nnx.has_instance(layer) and isinstance(layer, nnx.Module):
+                # The index of the layer that was just popped (its attribute name)
+                layer_index = len(self._layers)
+                attr_name = f"{self._nnx_submodule_prefix}{layer_index}"
+                if hasattr(self, attr_name):
+                    # Ensure __delattr__ properly unregisters from NNX state
+                    # This relies on Layer.__delattr__ -> nnx.Module.__delattr__
+                    delattr(self, attr_name)
+
         self.built = False
         self._functional = None
         if rebuild:
@@ -190,15 +218,15 @@ class Sequential(Model):
         # Build functional model
         inputs = self._layers[0].output
         x = inputs
-        for layer in self._layers[1:]:
+        for layer_obj in self._layers[1:]: # Renamed 'layer' to 'layer_obj'
             try:
-                x = layer(x)
+                x = layer_obj(x)
             except NotImplementedError:
                 # Can happen if shape inference is not implemented.
                 # TODO: consider reverting inbound nodes on layers processed.
                 return
             except TypeError as e:
-                signature = inspect.signature(layer.call)
+                signature = inspect.signature(layer_obj.call)
                 positional_args = [
                     param
                     for param in signature.parameters.values()
@@ -208,11 +236,14 @@ class Sequential(Model):
                     raise ValueError(
                         "Layers added to a Sequential model "
                         "can only have a single positional argument, "
-                        f"the input tensor. Layer {layer.__class__.__name__} "
+                        f"the input tensor. Layer {layer_obj.__class__.__name__} "
                         f"has multiple positional arguments: {positional_args}"
                     )
                 raise e
         outputs = x
+        # If NNX is enabled, assigning self._functional will trigger Nnx.Module.__setattr__
+        # (via Layer.__setattr__ -> super chain), so it will be registered if it's an nnx.Module.
+        # The Functional model itself needs to correctly register its own layers (handled in Step 2 of plan).
         self._functional = Functional(inputs=inputs, outputs=outputs)
 
     def call(self, inputs, training=None, mask=None, **kwargs):

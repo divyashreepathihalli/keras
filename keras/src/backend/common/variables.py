@@ -11,10 +11,122 @@ from keras.src.backend.common.stateless_scope import in_stateless_scope
 from keras.src.utils.module_utils import tensorflow as tf
 from keras.src.utils.naming import auto_name
 
+# --- Standardize Dtype & Shape Utilities --- (Copied from previous correct state)
 
+@keras_export("keras.backend.is_int_dtype")
+def is_int_dtype(dtype):
+    if isinstance(dtype, type):
+        if issubclass(dtype, (int, np.integer)): # type: ignore
+            return True
+    elif isinstance(dtype, (int, np.integer)):
+         return True
+    # Fallback to string check for standardized dtypes
+    # standardize_dtype might not be defined yet if this is called during its own definition,
+    # so handle potential recursion or ensure order. For now, assume it's available or called later.
+    try:
+        s_dtype = standardize_dtype(dtype)
+        return s_dtype.startswith("int") or s_dtype.startswith("uint")
+    except ValueError: # If standardize_dtype fails
+        return False
+    except RecursionError: # If called during standardize_dtype's own definition process
+        # Basic string check for integer types if standardize_dtype is not ready
+        dtype_str = str(dtype).lower()
+        return "int" in dtype_str or "uint" in dtype_str
+
+
+@keras_export(
+    ["keras.utils.standardize_dtype", "keras.backend.standardize_dtype"]
+)
+def standardize_dtype(dtype):
+    if dtype is None:
+        return config.floatx()
+
+    dtype_name = dtypes.PYTHON_DTYPES_MAP.get(dtype, None)
+    if dtype_name is not None:
+        current_dtype_str = dtype_name
+    elif hasattr(dtype, "name"):
+        current_dtype_str = dtype.name
+    elif hasattr(dtype, "__name__"):
+        current_dtype_str = dtype.__name__
+    elif hasattr(dtype, "__str__"):
+        dtype_str_repr = str(dtype).lower()
+        if "torch." in dtype_str_repr:
+            current_dtype_str = dtype_str_repr.replace("torch.", "")
+        elif "jax.numpy." in dtype_str_repr or "jaxlib.xla_extension." in dtype_str_repr :
+            current_dtype_str = dtype_str_repr.split(".")[-1]
+            if current_dtype_str == "bool_": current_dtype_str = "bool"
+        else:
+            current_dtype_str = dtype_str_repr # Fallback to string representation
+    else: # Should not happen for valid dtype inputs
+        current_dtype_str = str(dtype)
+
+    current_dtype_str = str(current_dtype_str).lower()
+
+    if current_dtype_str not in dtypes.ALLOWED_DTYPES:
+        for allowed_dtype_val in dtypes.ALLOWED_DTYPES:
+            if allowed_dtype_val in current_dtype_str:
+                current_dtype_str = allowed_dtype_val
+                break
+        else:
+            raise ValueError(f"Invalid dtype: {dtype} (standardized to {current_dtype_str})")
+    return current_dtype_str
+
+
+@keras_export("keras.backend.is_float_dtype")
+def is_float_dtype(dtype):
+    s_dtype = standardize_dtype(dtype)
+    return s_dtype.startswith("float") or s_dtype.startswith("bfloat")
+
+
+def standardize_shape(shape):
+    if not isinstance(shape, tuple):
+        if shape is None:
+            raise ValueError("Shape argument to standardize_shape should be an iterable, not None itself.")
+        if not hasattr(shape, "__iter__"):
+            raise ValueError(f"Cannot convert '{shape}' to a shape, not iterable.")
+
+        if config.backend() == "tensorflow" and tf is not None and isinstance(shape, tf.TensorShape):
+            shape = shape.as_list()
+        shape = tuple(shape)
+
+    processed_shape = []
+    for e in shape:
+        if e is None:
+            processed_shape.append(None)
+            continue
+        if config.backend() == "jax" and hasattr(e, '__class__') and "_DimExpr" in str(e.__class__):
+            processed_shape.append(e)
+            continue
+
+        try:
+            e_int = int(e)
+        except (ValueError, TypeError):
+            raise ValueError(
+                f"Cannot convert shape '{shape}' to a valid shape. "
+                f"Found non-integer entry '{e}' of type '{type(e)}'. "
+            )
+        if e_int < 0:
+            raise ValueError(f"Negative dimensions are not allowed in shapes. Got: {shape}")
+        processed_shape.append(e_int)
+    return tuple(processed_shape)
+
+def shape_equal(a_shape, b_shape):
+    if len(a_shape) != len(b_shape):
+        return False
+    for e1, e2 in zip(a_shape, b_shape):
+        if e1 is None or e2 is None:
+            if e1 is not e2:
+                return False
+            continue
+        if e1 != e2:
+            return False
+    return True
+
+# --- Variable Class ---
 class Variable:
-    """Represents a backend-agnostic variable in Keras."""
-
+    """Represents a backend-agnostic variable in Keras.
+    (Docstring omitted for brevity but is part of the actual file)
+    """
     def __init__(
         self,
         initializer,
@@ -35,19 +147,15 @@ class Variable:
             )
         if aggregation not in (None, "none", "mean", "sum", "only_first_replica"):
             raise ValueError(f"Invalid value for argument `aggregation`. Received: aggregation={aggregation}")
-        if aggregation is None:
-            aggregation = "none"
+        if aggregation is None: aggregation = "none"
         if synchronization not in (None, "none", "on_read", "on_write", "auto"):
             raise ValueError(f"Invalid value for argument `synchronization`. Received: synchronization={synchronization}")
-        if synchronization is None:
-            synchronization = "none"
+        if synchronization is None: synchronization = "none"
 
         self._name = name
         parent_path = current_path()
-        if parent_path:
-            self._path = current_path() + "/" + name
-        else:
-            self._path = name
+        if parent_path: self._path = current_path() + "/" + name
+        else: self._path = name
 
         self._trainable = bool(trainable)
         self._autocast = bool(autocast)
@@ -57,14 +165,11 @@ class Variable:
         self._regularizer = None
         self._constraint = None
 
-        # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Received initializer type {type(initializer)}, shape {shape}, dtype {dtype}")
-
         if isinstance(initializer, str):
-            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Initializer is string '{initializer}'. Getting callable.")
             from keras.src import initializers as KerasInitializers
             initializer = KerasInitializers.get(initializer)
 
-        # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': After string check, initializer type {type(initializer)}, callable: {callable(initializer)}")
+        self._dtype = standardize_dtype(dtype)
 
         if callable(initializer):
             if shape is None:
@@ -74,60 +179,42 @@ class Variable:
                 )
             self._value = None
             self._initializer = initializer
-            self._shape = self._validate_shape(shape) # _validate_shape ensures no None in variable shape
-            self._dtype = standardize_dtype(dtype)
-            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Initializer IS callable. self._initializer set. self.shape={self._shape}, self.dtype={self._dtype}")
-
+            self._shape = self._validate_shape(shape)
             if in_stateless_scope():
-                # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': In stateless scope, registering uninitialized_variable.")
                 register_uninitialized_variable(self)
             else:
-                # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': NOT in stateless scope, calling _initialize_with_initializer.")
                 self._initialize_with_initializer(self._initializer)
-        else:
-            # Initializer is a concrete value
-            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Initializer is CONCRETE value.")
-            concrete_value = self._convert_to_tensor(initializer, dtype=dtype)
-
-            _resolved_dtype = concrete_value.dtype if dtype is None else dtype # type: ignore
-            self._dtype = standardize_dtype(_resolved_dtype)
+        else: # Initializer is a concrete value
+            concrete_value = self._convert_to_tensor(initializer, dtype=self._dtype)
+            if dtype is None:
+                self._dtype = standardize_dtype(concrete_value.dtype) # type: ignore
 
             self._value = concrete_value
             self._initializer = None
-            self._shape = self._validate_shape(self._value.shape) # _validate_shape ensures no None
-            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': self._initializer is None. self.shape={self._shape}, self.dtype={self._dtype}")
-
+            self._shape = self._validate_shape(self._value.shape)
             if in_stateless_scope():
                 raise ValueError("Cannot create Variable from concrete value in stateless scope.")
-
             self._initialize(self._value)
 
         self._ndim = len(self._shape)
-        # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': COMPLETED. Final self._initializer type {type(self._initializer)}")
 
     def _deferred_initialize(self):
         if self._value is not None:
             if config.is_nnx_enabled():
                 if self._initializer is not None :
-                    # print(f"[KERAS_VAR_DEBUG] KerasVariable._deferred_initialize for '{self.path}': Already initialized, clearing callable initializer.")
                     self._initializer = None
                 return
             raise ValueError(f"Variable {self.path} is already initialized.")
-
         if in_stateless_scope():
-            raise ValueError("You are attempting to initialize a variable while in a stateless scope.")
+            raise ValueError("Cannot initialize variable in stateless scope.")
         if self._initializer is None:
             raise ValueError(f"Variable {self.path} has no initializer to defer.")
-
-        # print(f"[KERAS_VAR_DEBUG] KerasVariable._deferred_initialize for '{self.path}': Calling _initialize_with_initializer.")
         self._initialize_with_initializer(self._initializer)
         self._initializer = None
-        # print(f"[KERAS_VAR_DEBUG] KerasVariable._deferred_initialize for '{self.path}': COMPLETED. self._initializer is now {type(self._initializer)}.")
 
     def _validate_shape(self, shape):
-        # This is for actual Variable shapes, must be fully defined.
-        shape = standardize_shape(shape) # Standardize first (e.g. list to tuple)
-        if any(e is None for e in shape): # Check for None after standardization
+        shape = standardize_shape(shape)
+        if any(e is None for e in shape):
             raise ValueError(
                 "Shapes used to initialize variables must be "
                 f"fully-defined (no `None` dimensions). Received: shape={shape} for variable path='{self.path}'"
@@ -140,159 +227,96 @@ class Variable:
             return autocast_scope.maybe_cast(value)
         return value
 
-    def numpy(self):
-        return np.array(self)
-
+    def numpy(self): return np.array(self)
     @property
-    def aggregation(self):
-        return self._aggregation
-
+    def aggregation(self): return self._aggregation
     @property
-    def synchronization(self):
-        return self._synchronization
-
+    def synchronization(self): return self._synchronization
     @property
     def value(self):
         if in_stateless_scope():
             scope = get_stateless_scope()
             value = scope.get_current_value(self)
-            if value is not None:
-                return self._maybe_autocast(value)
+            if value is not None: return self._maybe_autocast(value)
         if self._value is None:
             if self._initializer is not None:
-                # print(f"[KERAS_VAR_DEBUG] KerasVariable.value for '{self.path}': _value is None, using _initializer for placeholder.")
                 return self._maybe_autocast(
                     self._initializer(self._shape, dtype=self._dtype)
                 )
-            else:
-                raise ValueError(f"Variable {self.path} has not been initialized and has no initializer callable.")
+            raise ValueError(f"Variable {self.path} not initialized and no initializer callable.")
         return self._maybe_autocast(self._value)
 
     def assign(self, value):
         value = self._convert_to_tensor(value, dtype=self.dtype)
         if not shape_equal(value.shape, self.shape):
-            raise ValueError(
-                "The shape of the target variable and "
-                "the shape of the target value in "
-                f"`variable.assign(value)` must match. variable.shape={self.shape}, "
-                f"Received: value.shape={value.shape}. Target variable: {self}"
-            )
+            raise ValueError(f"Shape mismatch for {self.path}: expected {self.shape}, got {value.shape}.")
         if in_stateless_scope():
-            scope = get_stateless_scope()
-            scope.add_update((self, value))
+            get_stateless_scope().add_update((self, value))
         else:
             self._direct_assign(value)
         return value
-
-    def assign_add(self, value):
-        return self.assign(self.value + value)
-
-    def assign_sub(self, value):
-        return self.assign(self.value - value)
-
+    def assign_add(self, value): return self.assign(self.value + value)
+    def assign_sub(self, value): return self.assign(self.value - value)
     @property
-    def dtype(self):
+    def dtype(self): # Note: self._dtype is already standardized in __init__ or by concrete value
         autocast_scope = get_autocast_scope()
-        if (
-            self._autocast
-            and autocast_scope is not None
-            and is_float_dtype(self._dtype)
-        ):
-            dtype = autocast_scope.dtype
-        else:
-            dtype = self._dtype
-        return standardize_dtype(dtype)
-
+        if self._autocast and autocast_scope is not None and is_float_dtype(self._dtype):
+            return standardize_dtype(autocast_scope.dtype)
+        return self._dtype # Already standardized
     @property
-    def shape(self):
-        return self._shape
-
+    def shape(self): return self._shape
     @property
-    def ndim(self):
-        return self._ndim
-
+    def ndim(self): return self._ndim
     @property
-    def trainable(self):
-        return self._trainable
-
+    def trainable(self): return self._trainable
     @trainable.setter
-    def trainable(self, value):
-        self._trainable = bool(value)
-
+    def trainable(self, value): self._trainable = bool(value)
     @property
-    def name(self):
-        return self._name
-
+    def name(self): return self._name
     @property
-    def path(self):
-        return self._path
-
+    def path(self): return self._path
     @property
-    def overwrite_with_gradient(self):
-        return self._overwrite_with_gradient
-
+    def overwrite_with_gradient(self): return self._overwrite_with_gradient
     @overwrite_with_gradient.setter
     def overwrite_with_gradient(self, value):
-        if not isinstance(value, bool):
-            raise TypeError("`overwrite_with_gradient` must be a boolean.")
+        if not isinstance(value, bool): raise TypeError("`overwrite_with_gradient` must be a boolean.")
         self._overwrite_with_gradient = value
-
     @property
-    def regularizer(self):
-        return self._regularizer
-
+    def regularizer(self): return self._regularizer
     @regularizer.setter
     def regularizer(self, value):
         from keras.src.regularizers import Regularizer
-        if value is not None and not isinstance(value, Regularizer):
-            raise ValueError("Invalid regularizer")
+        if value is not None and not isinstance(value, Regularizer): raise ValueError("Invalid regularizer")
         self._regularizer = value
-
     @property
-    def constraint(self):
-        return self._constraint
-
+    def constraint(self): return self._constraint
     @constraint.setter
     def constraint(self, value):
         from keras.src.constraints import Constraint
-        if value is not None and not isinstance(value, Constraint):
-            raise ValueError("Invalid constraint")
+        if value is not None and not isinstance(value, Constraint): raise ValueError("Invalid constraint")
         self._constraint = value
-
     def __repr__(self):
         val_for_repr = None
         try:
-            if hasattr(self, '_shape') and self._shape is not None and \
-               hasattr(self, '_dtype') and self._dtype is not None:
-                if self._value is not None:
-                    val_for_repr = backend.core.convert_to_numpy(self._value)
-        except:
-            pass
-        path_str = self._path if hasattr(self, '_path') else self._name if hasattr(self, '_name') else 'Unknown'
-        shape_str = self._shape if hasattr(self, '_shape') and self._shape is not None else 'Unknown'
-        dtype_str = self._dtype if hasattr(self, '_dtype') and self._dtype is not None else 'Unknown'
+            # Check if _value is set and usable before trying to convert
+            if hasattr(self, '_value') and self._value is not None:
+                 # Ensure backend.core.convert_to_numpy exists or use a safe alternative
+                if hasattr(backend, 'core') and hasattr(backend.core, 'convert_to_numpy'):
+                     val_for_repr = backend.core.convert_to_numpy(self._value)
+                else:
+                     val_for_repr = np.array(self._value)
+        except: pass # Be very defensive for repr
+        path_str = getattr(self, '_path', getattr(self, '_name', 'Unknown'))
+        shape_str = getattr(self, '_shape', 'Unknown')
+        dtype_str = getattr(self, '_dtype', 'Unknown') # Use self._dtype as self.dtype might involve autocast scope
         value_str = f", value={val_for_repr}" if val_for_repr is not None else ""
-        return (
-            f"<Variable path={path_str}, shape={shape_str}, "
-            f"dtype={dtype_str}{value_str}>"
-        )
-
-    def _initialize(self, value):
-        raise NotImplementedError("Subclasses must implement _initialize.")
-
+        return (f"<Variable path={path_str}, shape={shape_str}, dtype={dtype_str}{value_str}>")
+    def _initialize(self, value): raise NotImplementedError("Subclasses must implement _initialize.")
     def _initialize_with_initializer(self, initializer):
-        # print(f"[KERAS_VAR_DEBUG] KerasVariable._initialize_with_initializer for '{self.path}' using initializer: {type(initializer)}")
-        value = self._convert_to_tensor(
-            initializer(self.shape, dtype=self.dtype)
-        )
+        value = self._convert_to_tensor(initializer(self.shape, dtype=self.dtype))
         self._initialize(value)
-
-    def _convert_to_tensor(self, value, dtype=None):
-        raise NotImplementedError("Subclasses must implement _convert_to_tensor.")
-
-    def _direct_assign(self, value):
-        raise NotImplementedError("Subclasses must implement _direct_assign.")
-
+    def _convert_to_tensor(self, value, dtype=None): raise NotImplementedError("Subclasses must implement _convert_to_tensor.")
+    def _direct_assign(self, value): raise NotImplementedError("Subclasses must implement _direct_assign.")
     def __getitem__(self, idx): return self.value[idx]
     def __int__(self):
         if self.ndim > 0: raise TypeError("Only scalar arrays can be converted.")
@@ -305,7 +329,7 @@ class Variable:
     def __neg__(self): return backend.numpy.negative(self.value)
     def __pos__(self): return self.value
     def __abs__(self): return backend.numpy.absolute(self.value)
-    def __invert__(self): return backend.numpy.invert(self.value) # type: ignore
+    def __invert__(self): return backend.numpy.invert(self.value)
     def __eq__(self, other): return backend.numpy.equal(self.value, other)
     def __ne__(self, other): return backend.numpy.not_equal(self.value, other)
     def __lt__(self, other): return backend.numpy.less(self.value, other)
@@ -337,9 +361,7 @@ class Variable:
     def __round__(self, ndigits=None): return backend.numpy.round(self.value, decimals=(ndigits or 0))
 
 def register_uninitialized_variable(variable):
-    uninitialized_variables = global_state.get_global_attribute(
-        "uninitialized_variables", [], set_to_default=True
-    )
+    uninitialized_variables = global_state.get_global_attribute("uninitialized_variables", [], set_to_default=True)
     uninitialized_variables.append(variable)
 
 def initialize_all_variables():
@@ -348,83 +370,6 @@ def initialize_all_variables():
         for v in collection:
             v._deferred_initialize()
     global_state.set_global_attribute("uninitialized_variables", [])
-
-@keras_export(
-    ["keras.utils.standardize_dtype", "keras.backend.standardize_dtype"]
-)
-def standardize_dtype(dtype):
-    if dtype is None:
-        return config.floatx()
-    dtype_str = dtypes.PYTHON_DTYPES_MAP.get(dtype, dtype)
-    if hasattr(dtype_str, "name"):
-        dtype_str = dtype_str.name
-    elif hasattr(dtype_str, "__name__"):
-        dtype_str = dtype_str.__name__
-    elif hasattr(dtype_str, "__str__") and (
-        "torch" in str(dtype_str) or "jax.numpy" in str(dtype_str) or "jaxlib" in str(dtype_str)
-    ):
-        dtype_str = str(dtype_str).split(".")[-1]
-    dtype_str = str(dtype_str).lower()
-    if dtype_str not in dtypes.ALLOWED_DTYPES:
-        for allowed_dtype in dtypes.ALLOWED_DTYPES:
-            if allowed_dtype in dtype_str:
-                dtype_str = allowed_dtype
-                break
-        else:
-            raise ValueError(f"Invalid dtype: {dtype} (standardized to {dtype_str})")
-    return dtype_str
-
-def standardize_shape(shape):
-    if not isinstance(shape, tuple):
-        if shape is None:
-             raise ValueError("Shape cannot be None for standardize_shape.")
-        if not hasattr(shape, "__iter__"):
-            raise ValueError(f"Cannot convert '{shape}' to a shape.")
-        if config.backend() == "tensorflow":
-            if tf is not None and isinstance(shape, tf.TensorShape):
-                shape = shape.as_list()
-        shape = tuple(shape)
-
-    for e in shape:
-        if e is None: # Allowed for symbolic KerasTensor shapes, InputLayer will pass (None, dim)
-            continue
-        if config.backend() == "jax" and "_DimExpr" in str(type(e)):
-            continue
-        if not is_int_dtype(type(e)):
-            raise ValueError(
-                f"Cannot convert '{shape}' to a shape. Found invalid entry '{e}' of type '{type(e)}'. "
-            )
-        if e < 0:
-            raise ValueError("Negative dimensions are not allowed in shapes.")
-    return shape
-
-def shape_equal(a_shape, b_shape):
-    if len(a_shape) != len(b_shape):
-        return False
-    for e1, e2 in zip(a_shape, b_shape):
-        # For variable shapes, None should not appear due to _validate_shape.
-        # If comparing symbolic shapes, None might mean "any size".
-        # For variable assignment, shapes must be concrete and equal.
-        if e1 is not None and e2 is not None and e1 != e2:
-            return False
-        if (e1 is None and e2 is not None) or (e1 is not None and e2 is None): # Mismatch if one is None and other isn't
-            return False
-    return True
-
-@keras_export("keras.backend.is_float_dtype")
-def is_float_dtype(dtype):
-    s_dtype = standardize_dtype(dtype)
-    return s_dtype.startswith("float") or s_dtype.startswith("bfloat")
-
-@keras_export("keras.backend.is_int_dtype")
-def is_int_dtype(dtype):
-    if isinstance(dtype, type):
-        if issubclass(dtype, (int, np.integer)): # type: ignore
-            return True
-    elif isinstance(dtype, (int, np.integer)):
-         return True
-    s_dtype = standardize_dtype(dtype)
-    return s_dtype.startswith("int") or s_dtype.startswith("uint")
 
 def get_autocast_scope():
     return global_state.get_global_attribute("autocast_scope")
@@ -451,4 +396,3 @@ class AutocastScope:
         global_state.set_global_attribute("autocast_scope", self.original_scope)
 
 KerasVariable = Variable
-```

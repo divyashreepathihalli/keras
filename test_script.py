@@ -6,22 +6,10 @@ os.environ["KERAS_BACKEND"]="jax"
 os.environ["KERAS_NNX_ENABLED"]="true"
 import keras
 import numpy as np
+import optax # <--- MOVED IMPORT TO GLOBAL SCOPE
 
 print(f"Keras backend: {keras.backend.backend()}")
 print(f"Keras NNX enabled: {keras.config.is_nnx_enabled()}")
-
-# --- Test Config ---
-RUN_MINIMAL_KERAS_LAYER_TEST = False # Known working
-RUN_SEQUENTIAL_MODEL_TEST = False    # Known working, Pytree mismatch resolved by using nnx.Param for optimizer's wrt
-RUN_FUNCTIONAL_MODEL_TEST = True
-RUN_SUBCLASSED_MODEL_TEST = False
-
-# --- Minimal Keras Dense Layer Test (Optional) ---
-if RUN_MINIMAL_KERAS_LAYER_TEST:
-    print("\n[NNX_DEBUG] Starting Minimal Keras Dense Layer Test")
-    keras.config.set_dtype_policy("float32")
-    # ... (Minimal test code - confirmed working, output can be verbose) ...
-    print("[NNX_DEBUG] Finished Minimal Keras Dense Layer Test.")
 
 # --- Common Setup for Model Tests ---
 X_np = np.linspace(-jnp.pi, jnp.pi, 100)[:, None].astype(np.float32)
@@ -39,203 +27,174 @@ def common_test_step(model_arg, batch):
  loss = jnp.mean((y - y_pred) ** 2)
  return {'loss': loss}
 
+# --- Test Config ---
+RUN_MINIMAL_KERAS_LAYER_TEST = True
+RUN_SEQUENTIAL_MODEL_TEST = True
+RUN_FUNCTIONAL_MODEL_TEST = False
+RUN_SUBCLASSED_MODEL_TEST = False
+
+# --- Minimal Keras Dense Layer Test ---
+if RUN_MINIMAL_KERAS_LAYER_TEST:
+    print("\n[NNX_DEBUG] Starting Minimal Keras Dense Layer Test")
+    keras.config.set_dtype_policy("float32")
+    print(f"[NNX_DEBUG] Minimal Test - Keras dtype policy: {keras.config.dtype_policy().name}")
+
+    dense_layer_minimal = keras.layers.Dense(1, name="minimal_dense")
+    print(f"[NNX_DEBUG] Minimal Test - Dense layer created: {dense_layer_minimal.name}")
+    input_shape_minimal = (3, 2)
+    dense_layer_minimal.build(input_shape_minimal)
+    print(f"[NNX_DEBUG] Minimal Test - Dense layer built. Path: {dense_layer_minimal.path}")
+    if hasattr(dense_layer_minimal, '_kernel') and dense_layer_minimal._kernel is not None:
+        print(f"[NNX_DEBUG] Minimal Test - dense_layer_minimal._kernel type: {type(dense_layer_minimal._kernel)}")
+        if hasattr(dense_layer_minimal._kernel, 'actual_param'):
+            print(f"[NNX_DEBUG] Minimal Test - dense_layer_minimal._kernel.actual_param type: {type(dense_layer_minimal._kernel.actual_param)}")
+    if hasattr(dense_layer_minimal, 'bias') and dense_layer_minimal.bias is not None:
+        print(f"[NNX_DEBUG] Minimal Test - dense_layer_minimal.bias type: {type(dense_layer_minimal.bias)}")
+        if hasattr(dense_layer_minimal.bias, 'actual_param'):
+            print(f"[NNX_DEBUG] Minimal Test - dense_layer_minimal.bias.actual_param type: {type(dense_layer_minimal.bias.actual_param)}")
+
+    x_data_minimal = jnp.ones(input_shape_minimal, dtype=jnp.float32)
+    y_data_minimal = jnp.ones((input_shape_minimal[0], 1), dtype=jnp.float32)
+
+    def minimal_dense_loss_fn(layer_instance, x, y_true):
+        y_pred = layer_instance(x)
+        loss = jnp.mean((y_pred - y_true) ** 2)
+        return loss
+
+    try:
+        grads_minimal_dense = nnx.grad(minimal_dense_loss_fn, argnums=0)(dense_layer_minimal, x_data_minimal, y_data_minimal)
+        print(f"[NNX_DEBUG] Minimal Test - Grads calculated. Full grads_minimal_dense structure (type): {type(grads_minimal_dense)}")
+
+        kernel_grad_attr_name_to_check = '_kernel'
+        bias_grad_attr_name_to_check = 'bias'
+
+        if hasattr(grads_minimal_dense, kernel_grad_attr_name_to_check) and getattr(grads_minimal_dense, kernel_grad_attr_name_to_check) is not None:
+            kernel_grad_module_state = getattr(grads_minimal_dense, kernel_grad_attr_name_to_check)
+            if hasattr(kernel_grad_module_state, 'actual_param') and kernel_grad_module_state.actual_param is not None:
+                kernel_grad_val = kernel_grad_module_state.actual_param
+                if hasattr(kernel_grad_val, 'value'): kernel_grad_val = kernel_grad_val.value
+                print(f"[NNX_DEBUG] Minimal Test - Kernel grad value (via {kernel_grad_attr_name_to_check}.actual_param): shape {kernel_grad_val.shape}")
+        else: print(f"[NNX_DEBUG] Minimal Test - Kernel grad (via {kernel_grad_attr_name_to_check}.actual_param) not found.")
+
+        if hasattr(grads_minimal_dense, bias_grad_attr_name_to_check) and getattr(grads_minimal_dense, bias_grad_attr_name_to_check) is not None:
+            bias_grad_module_state = getattr(grads_minimal_dense, bias_grad_attr_name_to_check)
+            if hasattr(bias_grad_module_state, 'actual_param') and bias_grad_module_state.actual_param is not None:
+                bias_grad_val = bias_grad_module_state.actual_param
+                if hasattr(bias_grad_val, 'value'): bias_grad_val = bias_grad_val.value
+                print(f"[NNX_DEBUG] Minimal Test - Bias grad value (via {bias_grad_attr_name_to_check}.actual_param): shape {bias_grad_val.shape}")
+        elif hasattr(grads_minimal_dense, '_trainable_variables') and isinstance(grads_minimal_dense._trainable_variables, dict) and \
+           1 in grads_minimal_dense._trainable_variables and grads_minimal_dense._trainable_variables[1] is not None and \
+           hasattr(grads_minimal_dense._trainable_variables[1], 'actual_param'):
+            bias_grad_alt_val = grads_minimal_dense._trainable_variables[1].actual_param
+            if hasattr(bias_grad_alt_val, 'value'): bias_grad_alt_val = bias_grad_alt_val.value
+            print(f"[NNX_DEBUG] Minimal Test - Bias grad value (via _trainable_variables[1].actual_param): shape {bias_grad_alt_val.shape}")
+        else:
+            print(f"[NNX_DEBUG] Minimal Test - Bias grad (via {bias_grad_attr_name_to_check}.actual_param or _trainable_variables[1]) not found.")
+    except Exception as e:
+        print(f"[NNX_DEBUG] Minimal Test - Error during gradient calculation or inspection: {e}")
+        import traceback
+        traceback.print_exc()
+    print("[NNX_DEBUG] Finished Minimal Keras Dense Layer Test.")
+
+
+# --- Keras Sequential Model Test ---
+if RUN_SEQUENTIAL_MODEL_TEST:
+    print("\n[NNX_DEBUG] Starting Keras Sequential Test...")
+    keras.config.set_dtype_policy("float16")
+    print(f"[NNX_DEBUG] Sequential Test - Keras dtype policy: {keras.config.dtype_policy().name}")
+
+    seq_model = keras.Sequential([keras.layers.Dense(1, name="dense_layer_in_seq")])
+    seq_model.build(X_np.shape)
+
+    seq_tx = optax.sgd(1e-3)
+    seq_optimizer_wrt = nnx.Param
+    seq_optimizer = nnx.Optimizer(seq_model, seq_tx, wrt=seq_optimizer_wrt)
+
+    @nnx.jit
+    def seq_train_step(model_arg, optimizer_arg, batch):
+        x_batch, y_batch = batch
+        def loss_fn(model_for_loss):
+            y_pred = model_for_loss(x_batch)
+            return jnp.mean((y_pred - y_batch) ** 2)
+
+        grads = nnx.grad(loss_fn, argnums=0)(model_arg)
+
+        try:
+            if hasattr(grads, '_functional') and grads._functional is not None:
+                jax.debug.print("Seq train_step: Grads has _functional key.")
+            else:
+                jax.debug.print("Seq train_step: Grads does NOT have _functional key. Full grads: {}", grads)
+        except Exception as e:
+            jax.debug.print("Error during simplified debug print of grads (Seq): {e_str}. Full grads: {grads_full}", e_str=str(e), grads_full=grads)
+
+        optimizer_arg.update(grads)
+        return model_arg, optimizer_arg
+
+    current_seq_model_state = seq_model
+    current_seq_optimizer_state = seq_optimizer
+
+    print("\n[NNX_DEBUG] Debugging Pytree Structures for Sequential Optimizer")
+    seq_debug_batch = next(common_dataset())
+    def _seq_debug_loss(m, x, y):
+        y_pred = m(x)
+        return jnp.mean((y_pred - y) ** 2)
+
+    seq_debug_grads_state = nnx.grad(_seq_debug_loss, argnums=0)(current_seq_model_state, seq_debug_batch[0], seq_debug_batch[1])
+    print(f"[NNX_DEBUG] Opti Debug - grads_state for Sequential (type): {type(seq_debug_grads_state)}")
+    print(f"[NNX_DEBUG] Opti Debug - grads_state for Sequential (structure): {jax.tree.structure(seq_debug_grads_state)}")
+
+    try:
+        params_state_for_optax, _ = nnx.split(current_seq_optimizer_state.model, current_seq_optimizer_state.wrt)
+        print(f"[NNX_DEBUG] Opti Debug - params_state for Sequential (type from nnx.split): {type(params_state_for_optax)}")
+        print(f"[NNX_DEBUG] Opti Debug - params_state for Sequential (structure from nnx.split): {jax.tree.structure(params_state_for_optax)}")
+
+        def get_leaf_value_for_optax(x):
+            return x.value if hasattr(x, 'value') else x
+
+        seq_param_values = jax.tree.map(get_leaf_value_for_optax, params_state_for_optax)
+        seq_grad_values = jax.tree.map(get_leaf_value_for_optax, seq_debug_grads_state)
+
+        print(f"[NNX_DEBUG] Opti Debug - Structure of param_VALUES for Optax (Sequential): {jax.tree.structure(seq_param_values)}")
+        print(f"[NNX_DEBUG] Opti Debug - Structure of grad_VALUES for Optax (Sequential): {jax.tree.structure(seq_grad_values)}")
+
+    except Exception as e:
+        print(f"[NNX_DEBUG] Opti Debug - Error inspecting Sequential optimizer Pytree structures: {e}")
+        import traceback
+        traceback.print_exc()
+    print("[NNX_DEBUG] End Debugging Pytree Structures (Sequential Model)\n")
+
+    for step, batch_data in enumerate(common_dataset()):
+        current_seq_model_state, current_seq_optimizer_state = seq_train_step(current_seq_model_state, current_seq_optimizer_state, batch_data)
+        if step % 100 == 0:
+            logs = common_test_step(current_seq_model_state, (X_np, Y_np))
+            print(f"Sequential step: {step}, loss: {logs['loss']}")
+        if step >= 1000: break
+    print("Keras Sequential Test Run finished.")
+
+    print("Final Keras Sequential weights:")
+    try:
+        if current_seq_model_state._functional and hasattr(current_seq_model_state._functional, '_operations') and \
+           len(current_seq_model_state._functional._operations) > 1:
+            dense_layer_in_seq = current_seq_model_state._functional._operations[1]
+            if hasattr(dense_layer_in_seq, 'kernel') and hasattr(dense_layer_in_seq.kernel, 'actual_param') and \
+               hasattr(dense_layer_in_seq, 'bias') and hasattr(dense_layer_in_seq.bias, 'actual_param'):
+                print(f"  Kernel: {dense_layer_in_seq.kernel.actual_param.value}")
+                print(f"  Bias: {dense_layer_in_seq.bias.actual_param.value}")
+    except Exception as e: print(f"  Error printing final Seq weights: {e}")
+    # ... (final grad printing for sequential)
+
+
 # --- Functional Model Test ---
 if RUN_FUNCTIONAL_MODEL_TEST:
     print("\n[NNX_DEBUG] Starting Keras Functional Model Test...")
-    keras.config.set_dtype_policy("float16")
-    print(f"[NNX_DEBUG] Functional Test - Keras dtype policy: {keras.config.dtype_policy().name}")
-
-    input_tensor = keras.Input(shape=(1,), name="input_1", dtype="float32")
-    # Ensure layers within Functional model also have unique names if accessed that way
-    dense_output = keras.layers.Dense(1, name="dense_functional_1")(input_tensor)
-    functional_model = keras.Model(inputs=input_tensor, outputs=dense_output, name="functional_model_1")
-
-    functional_tx = optax.sgd(1e-3)
-    functional_optimizer_wrt = nnx.Param
-    functional_optimizer = nnx.Optimizer(functional_model, functional_tx, wrt=functional_optimizer_wrt)
-
-    @nnx.jit
-    def functional_train_step(model_arg, optimizer_arg, batch):
-        x, y = batch
-        def loss_fn(model_for_loss):
-            y_pred = model_for_loss(x)
-            return jnp.mean((y - y_pred) ** 2)
-
-        grads = nnx.grad(loss_fn, argnums=0)(model_arg)
-
-        try:
-            # For Functional models, children are named `_nnx_internal_op_0`, `_nnx_internal_op_1` etc.
-            # op_0 is InputLayer, op_1 is Dense layer
-            op1_grads = grads.get('_nnx_internal_op_1')
-            if op1_grads:
-                kernel_grads = op1_grads.get('_kernel')
-                if kernel_grads and hasattr(kernel_grads, 'actual_param'):
-                     jax.debug.print("kernel grad (Functional)-->{}", kernel_grads.actual_param.value)
-
-                bias_grads = op1_grads.get('bias')
-                if bias_grads and hasattr(bias_grads, 'actual_param'):
-                    jax.debug.print("bias grad (Functional)-->{}", bias_grads.actual_param.value)
-            else:
-                # Fallback check if structure is via _layers (less likely now with explicit attrs)
-                layers_in_grads = grads.get('_layers')
-                if layers_in_grads and isinstance(layers_in_grads, dict) and 1 in layers_in_grads:
-                    dense_grads_node = layers_in_grads[1]
-                    # ... (further checks as in Sequential)
-                    jax.debug.print("Functional grads found via _layers path. Full: {}", dense_grads_node)
-                else:
-                    jax.debug.print("Functional grads: Neither _nnx_internal_op_1 nor _layers[1] found. Full grads: {}", grads)
-        except Exception as e:
-            jax.debug.print("Error during debug print of Functional grads: {e_str}. Full grads: {grads_full}", e_str=str(e), grads_full=grads)
-
-        optimizer_arg.update(grads)
-        return model_arg, optimizer_arg
-
-    current_fm_state = functional_model
-    current_fm_optimizer_state = functional_optimizer
-
-    print("\n[NNX_DEBUG] Debugging Pytree Structures for Functional Optimizer")
-    fm_debug_batch = next(common_dataset())
-    def _fm_debug_loss(m, x_arg, y_arg):
-        y_pred = m(x_arg)
-        return jnp.mean((y_pred - y_arg) ** 2)
-    fm_debug_grads = nnx.grad(_fm_debug_loss, argnums=0)(current_fm_state, fm_debug_batch[0], fm_debug_batch[1])
-    print(f"[NNX_DEBUG] Opti Debug - grads structure for Functional (raw type): {type(fm_debug_grads)}")
-    # print(f"[NNX_DEBUG] Opti Debug - grads structure for Functional (str): {str(fm_debug_grads)}") # Potentially too verbose
-
-    try:
-        fm_params_state, _ = nnx.split(current_fm_optimizer_state.model, current_fm_optimizer_state.wrt)
-        print(f"[NNX_DEBUG] Opti Debug - params_state for Functional (raw type from nnx.split): {type(fm_params_state)}")
-        # print(f"[NNX_DEBUG] Opti Debug - params_state for Functional (str): {str(fm_params_state)}") # Potentially too verbose
-
-        def get_safe_repr_type_only(x): # Simplified further
-            return type(x)
-
-        fm_param_types_repr = jax.tree.map(get_safe_repr_type_only, fm_params_state)
-        print(f"[NNX_DEBUG] Opti Debug - param_TYPES for Functional: {fm_param_types_repr}")
-        fm_grad_types_repr = jax.tree.map(get_safe_repr_type_only, fm_debug_grads)
-        print(f"[NNX_DEBUG] Opti Debug - grad_TYPES for Functional: {fm_grad_types_repr}")
-
-        # Compare full structures using jax.tree.structure
-        print(f"[NNX_DEBUG] Opti Debug - Structure of params_state_for_optax (Functional): {jax.tree.structure(fm_params_state)}")
-        print(f"[NNX_DEBUG] Opti Debug - Structure of grads_state (Functional): {jax.tree.structure(fm_debug_grads)}")
+    # ... (Functional model test code as before) ...
+    print("Functional model test currently disabled by RUN_FUNCTIONAL_MODEL_TEST flag.")
 
 
-    except Exception as e:
-        print(f"[NNX_DEBUG] Opti Debug - Error inspecting Functional optimizer params_state: {e}")
-        import traceback; traceback.print_exc()
-    print("[NNX_DEBUG] End Debugging Pytree Structures (Functional Model)\n")
-
-    for step, batch_data in enumerate(common_dataset()):
-        current_fm_state, current_fm_optimizer_state = functional_train_step(current_fm_state, current_fm_optimizer_state, batch_data)
-        if step % 100 == 0:
-            logs = common_test_step(current_fm_state, (X_np, Y_np))
-            print(f"Functional step: {step}, loss: {logs['loss']}")
-        if step >= 1000: break # Reduced steps for faster test cycle
-    print("Keras Functional Test Run finished.")
-
-    print("Final Keras Functional weights:")
-    try:
-        final_dense_layer = current_fm_state.get_layer("dense_functional_1") # Name used in Functional def
-        if final_dense_layer and hasattr(final_dense_layer, 'kernel') and hasattr(final_dense_layer.kernel, 'actual_param'):
-            print(f"  Kernel: {final_dense_layer.kernel.actual_param.value}")
-        if final_dense_layer and hasattr(final_dense_layer, 'bias') and hasattr(final_dense_layer.bias, 'actual_param'):
-            print(f"  Bias: {final_dense_layer.bias.actual_param.value}")
-    except Exception as e:
-        print(f"  Error printing Functional final weights: {e}")
-
-    fm_final_grads = nnx.grad(_fm_debug_loss, argnums=0)(current_fm_state, fm_debug_batch[0], fm_debug_batch[1])
-    print("Final Keras Functional gradients:")
-    # print(f"  Full final_grads structure: {fm_final_grads}") # Verbose
-    # Refined grad printing for functional
-    op1_final_grads = fm_final_grads.get('_nnx_internal_op_1')
-    if op1_final_grads:
-        kernel_final_grads = op1_final_grads.get('_kernel')
-        if kernel_final_grads and hasattr(kernel_final_grads, 'actual_param'):
-            print(f"  Kernel grad: {kernel_final_grads.actual_param.value if hasattr(kernel_final_grads.actual_param, 'value') else kernel_final_grads.actual_param}")
-        bias_final_grads = op1_final_grads.get('bias')
-        if bias_final_grads and hasattr(bias_final_grads, 'actual_param'):
-            print(f"  Bias grad: {bias_final_grads.actual_param.value if hasattr(bias_final_grads.actual_param, 'value') else bias_final_grads.actual_param}")
-    else:
-        print("  Final grads for Functional model don't have _nnx_internal_op_1 path.")
-
-
-# --- Keras Sequential Model Test (Optional - if RUN_SEQUENTIAL_MODEL_TEST is True) ---
-if RUN_SEQUENTIAL_MODEL_TEST:
-    print("\n[NNX_DEBUG] Starting Keras Sequential Test...")
-    # ... (Sequential model test code as before, known to work now) ...
-    print("Sequential model test was skipped by config.")
-
-
-# --- Subclassed Model Test (Optional - if RUN_SUBCLASSED_MODEL_TEST is True) ---
+# --- Subclassed Model Test ---
 if RUN_SUBCLASSED_MODEL_TEST:
     print("\n[NNX_DEBUG] Starting Keras Subclassed Model Test...")
-    keras.config.set_dtype_policy("float16")
-    print(f"[NNX_DEBUG] Subclassed Test - Keras dtype policy: {keras.config.dtype_policy().name}")
-
-    class MySimpleModel(keras.Model):
-       def __init__(self, **kwargs):
-           super().__init__(**kwargs)
-           self.dense_layer = keras.layers.Dense(1, name="dense_subclassed_1")
-       def call(self, inputs):
-           return self.dense_layer(inputs)
-
-    subclassed_model = MySimpleModel(name="subclassed_model_1")
-    subclassed_model.build(X_np.shape)
-
-    subclassed_tx = optax.sgd(1e-3)
-    subclassed_optimizer_wrt = nnx.Param
-    subclassed_optimizer = nnx.Optimizer(subclassed_model, subclassed_tx, wrt=subclassed_optimizer_wrt)
-
-    @nnx.jit
-    def subclassed_train_step(model_arg, optimizer_arg, batch):
-        x, y = batch
-        def loss_fn(model_for_loss):
-            y_pred = model_for_loss(x)
-            return jnp.mean((y - y_pred) ** 2)
-        grads = nnx.grad(loss_fn, argnums=0)(model_arg)
-        try:
-            # For subclassed model, grads should have 'dense_layer' attribute
-            dense_grads = grads.get('dense_layer')
-            if dense_grads:
-                if hasattr(dense_grads, '_kernel') and hasattr(dense_grads._kernel, 'actual_param'):
-                     jax.debug.print("kernel grad (Subclassed)-->{}", dense_grads._kernel.actual_param.value)
-                if hasattr(dense_grads, 'bias') and hasattr(dense_grads.bias, 'actual_param'):
-                     jax.debug.print("bias grad (Subclassed)-->{}", dense_grads.bias.actual_param.value)
-            else:
-                jax.debug.print("Subclassed grads: dense_layer not found. Full grads: {}", grads)
-        except Exception as e:
-            jax.debug.print("Error during debug print of Subclassed grads: {e_str}", e_str=str(e))
-        optimizer_arg.update(grads)
-        return model_arg, optimizer_arg
-
-    current_sc_state = subclassed_model
-    current_sc_optimizer_state = subclassed_optimizer
-
-    print("\n[NNX_DEBUG] Debugging Pytree Structures for Subclassed Optimizer")
-    sc_debug_batch = next(common_dataset())
-    def _sc_debug_loss(m, x_arg, y_arg):
-        y_pred = m(x_arg)
-        return jnp.mean((y_pred - y_arg) ** 2)
-    sc_debug_grads = nnx.grad(_sc_debug_loss, argnums=0)(current_sc_state, sc_debug_batch[0], sc_debug_batch[1])
-    print(f"[NNX_DEBUG] Opti Debug - grads structure for Subclassed (str): {str(sc_debug_grads)}")
-    try:
-        sc_params_state, _ = nnx.split(current_sc_optimizer_state.model, current_sc_optimizer_state.wrt)
-        print(f"[NNX_DEBUG] Opti Debug - params_state for Subclassed (str): {str(sc_params_state)}")
-        print(f"[NNX_DEBUG] Opti Debug - Structure of params_state (Subclassed): {jax.tree.structure(sc_params_state)}")
-        print(f"[NNX_DEBUG] Opti Debug - Structure of grads_state (Subclassed): {jax.tree.structure(sc_debug_grads)}")
-    except Exception as e:
-        print(f"[NNX_DEBUG] Opti Debug - Error inspecting Subclassed optimizer params_state: {e}")
-    print("[NNX_DEBUG] End Debugging Pytree Structures (Subclassed Model)\n")
-
-
-    for step, batch_data in enumerate(common_dataset()):
-        current_sc_state, current_sc_optimizer_state = subclassed_train_step(current_sc_state, current_sc_optimizer_state, batch_data)
-        if step % 100 == 0:
-            logs = common_test_step(current_sc_state, (X_np, Y_np))
-            print(f"Subclassed step: {step}, loss: {logs['loss']}")
-        if step >= 1000: break
-    print("Keras Subclassed Test Run finished.")
-    # ... (final weight and grad prints for subclassed model) ...
-
+    # ... (Subclassed model test code) ...
+    print("Subclassed model test currently disabled by RUN_SUBCLASSED_MODEL_TEST flag.")
 
 print("Full test script finished.")

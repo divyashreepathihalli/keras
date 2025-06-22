@@ -13,81 +13,7 @@ from keras.src.utils.naming import auto_name
 
 
 class Variable:
-    """Represents a backend-agnostic variable in Keras.
-
-    A `Variable` acts as a container for state. It holds a tensor value and can
-    be updated. With the JAX backend, variables are used to implement
-    "functionalization", the pattern of lifting stateful operations out of
-    a piece of computation to turn it into a stateless function.
-
-    Args:
-        initializer: Initial value or callable for initialization.
-            If a callable is used, it should take the arguments
-            `shape` and `dtype`.
-        shape: Optional. Tuple for the variable's shape.
-            Required if `initializer` is a callable.
-        dtype: Optional. Data type of the variable. Defaults to the global float
-            dtype type (`"float32"` if never configured).
-        trainable: Optional. Boolean indicating if variable is trainable.
-            Defaults to `True`.
-        autocast: Optional. Boolean indicating whether the variable supports
-            autocasting. If `True`, the layer may first convert the variable
-            to the compute data type when accessed. Defaults to `True`.
-        aggregation: Optional string, one of `None`, `"none"`, `"mean"`,
-            `"sum"` or `"only_first_replica"` specifying how a distributed
-            variable will be aggregated. This serves as a semantic annotation,
-            to be taken into account by downstream backends or users. Defaults
-            to `"none"`.
-        name: Optional. A unique name for the variable. Automatically generated
-            if not set.
-
-    Attributes:
-        shape: The shape of the variable (tuple of integers).
-        ndim: The number of dimensions of the variable (integer).
-        dtype: The data type of the variable (string).
-        trainable: Whether the variable is trainable (boolean).
-        autocast: Whether the variable supports autocasting (boolean).
-        aggregation: How a distributed variable will be aggregated (string).
-        value: The current value of the variable (NumPy array or tensor).
-        name: The name of the variable (string).
-        path: The path of the variable within the Keras model or layer (string).
-        kwargs: Additional backend-specific keyword arguments.
-
-    Examples:
-
-    **Initializing a `Variable` with a NumPy array:**
-
-    ```python
-    import numpy as np
-    import keras
-    initial_array = np.ones((3, 3))
-    variable_from_array = keras.Variable(initializer=initial_array)
-    ```
-
-    **Using a Keras initializer to create a `Variable`:**
-
-    ```python
-    from keras.src.initializers import Ones
-    variable_from_initializer = keras.Variable(
-        initializer=Ones(), shape=(3, 3), dtype="float32"
-    )
-    ```
-
-    **Updating the value of a `Variable`:**
-
-    ```python
-    new_value = np.zeros((3, 3), dtype="float32")
-    variable_from_array.assign(new_value)
-    ```
-
-    **Marking a `Variable` as non-trainable:**
-
-    ```python
-    non_trainable_variable = keras.Variable(
-        initializer=np.ones((3, 3), dtype="float32"), trainable=False
-    )
-    ```
-    """
+    """Represents a backend-agnostic variable in Keras."""
 
     def __init__(
         self,
@@ -105,137 +31,106 @@ class Variable:
         name = name or auto_name(self.__class__.__name__)
         if not isinstance(name, str) or "/" in name:
             raise ValueError(
-                "Argument `name` must be a string and "
-                "cannot contain character `/`. "
-                f"Received: name={name}"
+                f"Argument `name` must be a string and cannot contain character `/`. Received: name={name}"
             )
-        if aggregation not in (
-            None,
-            "none",
-            "mean",
-            "sum",
-            "only_first_replica",
-        ):
-            raise ValueError(
-                "Invalid value for argument `aggregation`. Expected "
-                "one of `None`, `'none'`, `'mean'`, `'sum'`, "
-                "`'only_first_replica'`. "
-                f"Received: aggregation={aggregation}"
-            )
+        if aggregation not in (None, "none", "mean", "sum", "only_first_replica"):
+            raise ValueError(f"Invalid value for argument `aggregation`. Received: aggregation={aggregation}")
         if aggregation is None:
             aggregation = "none"
-        if synchronization not in (
-            None,
-            "none",
-            "on_read",
-            "on_write",
-            "auto",
-        ):
-            raise ValueError(
-                "Invalid value for argument `synchronization`. Expected "
-                "one of `None`, `'none'`, `'on_read'`, `'on_write'`, "
-                "`'auto'`. "
-                f"Received: synchronization={synchronization}"
-            )
+        if synchronization not in (None, "none", "on_read", "on_write", "auto"):
+            raise ValueError(f"Invalid value for argument `synchronization`. Received: synchronization={synchronization}")
         if synchronization is None:
             synchronization = "none"
+
         self._name = name
         parent_path = current_path()
         if parent_path:
             self._path = current_path() + "/" + name
         else:
             self._path = name
-        self._shape = None
-        self._initializer = None
-        self._regularizer = None
-        self._constraint = None
+
         self._trainable = bool(trainable)
         self._autocast = bool(autocast)
         self._aggregation = aggregation
         self._synchronization = synchronization
-        # `self._overwrite_with_gradient` is an internal property to determine
-        # whether this variable should be overwritten by the computed gradient.
-        # Ref: https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py
         self._overwrite_with_gradient = False
-        if isinstance(initializer, str):
-            from keras.src import initializers
+        self._regularizer = None
+        self._constraint = None
 
-            initializer = initializers.get(initializer)
+        # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Received initializer type {type(initializer)}, shape {shape}, dtype {dtype}")
+
+        if isinstance(initializer, str):
+            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Initializer is string '{initializer}'. Getting callable.")
+            from keras.src import initializers as KerasInitializers
+            initializer = KerasInitializers.get(initializer)
+
+        # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': After string check, initializer type {type(initializer)}, callable: {callable(initializer)}")
+
         if callable(initializer):
             if shape is None:
                 raise ValueError(
-                    "When creating a Variable from an initializer, "
-                    "the `shape` argument should be specified. "
-                    f"Received: initializer={initializer} "
-                    f"and shape={shape}"
+                    "When creating a Variable from a callable initializer, "
+                    f"the `shape` argument must be specified. Received: initializer={initializer}, shape={shape}"
                 )
-        else:
-            initializer = self._convert_to_tensor(initializer, dtype=dtype)
-            # If dtype is None and `initializer` is an array, use its dtype.
-            if dtype is None:
-                dtype = initializer.dtype
-        self._dtype = standardize_dtype(dtype)
+            self._value = None
+            self._initializer = initializer
+            self._shape = self._validate_shape(shape) # _validate_shape ensures no None in variable shape
+            self._dtype = standardize_dtype(dtype)
+            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Initializer IS callable. self._initializer set. self.shape={self._shape}, self.dtype={self._dtype}")
 
-        if in_stateless_scope():
-            if callable(initializer):
-                self._value = None
-                self._initializer = initializer
-                self._shape = self._validate_shape(shape)
+            if in_stateless_scope():
+                # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': In stateless scope, registering uninitialized_variable.")
                 register_uninitialized_variable(self)
             else:
-                raise ValueError(
-                    "You are attempting to create a variable "
-                    "while in a stateless scope. This is disallowed. "
-                    "Make sure that all variables are created "
-                    "before you start using your layer/model objects.\n\n"
-                    "In some cases, you might be seeing this error "
-                    "because you need to "
-                    "implement a `def build(self, input_shape)` method "
-                    "on your layer/model, which will "
-                    "create its variables.\n\n"
-                    "In some other cases, you might be seeing this error "
-                    "because you are instantiating a `Variable` and "
-                    "assigning it to a layer without going through "
-                    "self.add_variable()/self.add_weight(). Always prefer "
-                    "using these methods "
-                    "(with a `shape` and `initializer` argument)."
-                )
+                # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': NOT in stateless scope, calling _initialize_with_initializer.")
+                self._initialize_with_initializer(self._initializer)
         else:
-            if callable(initializer):
-                self._shape = self._validate_shape(shape)
-                self._initialize_with_initializer(initializer)
-            else:
-                self._initialize(initializer)
-                self._shape = self._validate_shape(self._value.shape)
+            # Initializer is a concrete value
+            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': Initializer is CONCRETE value.")
+            concrete_value = self._convert_to_tensor(initializer, dtype=dtype)
+
+            _resolved_dtype = concrete_value.dtype if dtype is None else dtype # type: ignore
+            self._dtype = standardize_dtype(_resolved_dtype)
+
+            self._value = concrete_value
+            self._initializer = None
+            self._shape = self._validate_shape(self._value.shape) # _validate_shape ensures no None
+            # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': self._initializer is None. self.shape={self._shape}, self.dtype={self._dtype}")
+
+            if in_stateless_scope():
+                raise ValueError("Cannot create Variable from concrete value in stateless scope.")
+
+            self._initialize(self._value)
+
         self._ndim = len(self._shape)
+        # print(f"[KERAS_VAR_DEBUG] KerasVariable.__init__ for '{self._path}': COMPLETED. Final self._initializer type {type(self._initializer)}")
 
     def _deferred_initialize(self):
         if self._value is not None:
-            # If NNX is enabled, it's possible the variable was already
-            # initialized by a concrete call. In this case,
-            # _deferred_initialize becomes a no-op for this variable.
             if config.is_nnx_enabled():
-                self._initializer = None  # Clear initializer as it's now "used"
+                if self._initializer is not None :
+                    # print(f"[KERAS_VAR_DEBUG] KerasVariable._deferred_initialize for '{self.path}': Already initialized, clearing callable initializer.")
+                    self._initializer = None
                 return
             raise ValueError(f"Variable {self.path} is already initialized.")
 
         if in_stateless_scope():
-            raise ValueError(
-                "You are attempting to initialize a variable "
-                "while in a stateless scope. This is disallowed. "
-                "Make sure that all variables are initialized "
-                "before you start using your layer/model objects."
-            )
+            raise ValueError("You are attempting to initialize a variable while in a stateless scope.")
+        if self._initializer is None:
+            raise ValueError(f"Variable {self.path} has no initializer to defer.")
+
+        # print(f"[KERAS_VAR_DEBUG] KerasVariable._deferred_initialize for '{self.path}': Calling _initialize_with_initializer.")
         self._initialize_with_initializer(self._initializer)
         self._initializer = None
+        # print(f"[KERAS_VAR_DEBUG] KerasVariable._deferred_initialize for '{self.path}': COMPLETED. self._initializer is now {type(self._initializer)}.")
 
     def _validate_shape(self, shape):
-        shape = standardize_shape(shape)
-        if None in shape:
+        # This is for actual Variable shapes, must be fully defined.
+        shape = standardize_shape(shape) # Standardize first (e.g. list to tuple)
+        if any(e is None for e in shape): # Check for None after standardization
             raise ValueError(
                 "Shapes used to initialize variables must be "
-                "fully-defined (no `None` dimensions). Received: "
-                f"shape={shape} for variable path='{self.path}'"
+                f"fully-defined (no `None` dimensions). Received: shape={shape} for variable path='{self.path}'"
             )
         return shape
 
@@ -250,30 +145,27 @@ class Variable:
 
     @property
     def aggregation(self):
-        """The strategy for aggregating this variable."""
         return self._aggregation
 
     @property
     def synchronization(self):
-        """The strategy for synchronizing this variable."""
         return self._synchronization
 
     @property
     def value(self):
-        """The current value of the variable (numpy array or backend tensor)."""
         if in_stateless_scope():
             scope = get_stateless_scope()
             value = scope.get_current_value(self)
             if value is not None:
                 return self._maybe_autocast(value)
         if self._value is None:
-            # Uninitialized variable. Return a placeholder.
-            # This is fine because it's only ever used
-            # in during shape inference / graph tracing
-            # (anything else would be a bug, to be fixed.)
-            return self._maybe_autocast(
-                self._initializer(self._shape, dtype=self._dtype)
-            )
+            if self._initializer is not None:
+                # print(f"[KERAS_VAR_DEBUG] KerasVariable.value for '{self.path}': _value is None, using _initializer for placeholder.")
+                return self._maybe_autocast(
+                    self._initializer(self._shape, dtype=self._dtype)
+                )
+            else:
+                raise ValueError(f"Variable {self.path} has not been initialized and has no initializer callable.")
         return self._maybe_autocast(self._value)
 
     def assign(self, value):
@@ -282,10 +174,8 @@ class Variable:
             raise ValueError(
                 "The shape of the target variable and "
                 "the shape of the target value in "
-                "`variable.assign(value)` must match. "
-                f"variable.shape={self.value.shape}, "
-                f"Received: value.shape={value.shape}. "
-                f"Target variable: {self}"
+                f"`variable.assign(value)` must match. variable.shape={self.shape}, "
+                f"Received: value.shape={value.shape}. Target variable: {self}"
             )
         if in_stateless_scope():
             scope = get_stateless_scope()
@@ -295,14 +185,13 @@ class Variable:
         return value
 
     def assign_add(self, value):
-        return self.assign(self + value)
+        return self.assign(self.value + value)
 
     def assign_sub(self, value):
-        return self.assign(self - value)
+        return self.assign(self.value - value)
 
     @property
     def dtype(self):
-        """The data type of the variable."""
         autocast_scope = get_autocast_scope()
         if (
             self._autocast
@@ -312,21 +201,18 @@ class Variable:
             dtype = autocast_scope.dtype
         else:
             dtype = self._dtype
-        return backend.standardize_dtype(dtype)
+        return standardize_dtype(dtype)
 
     @property
     def shape(self):
-        """The shape of the variable."""
         return self._shape
 
     @property
     def ndim(self):
-        """The number of dimensions of the variable."""
         return self._ndim
 
     @property
     def trainable(self):
-        """Whether the variable is trainable."""
         return self._trainable
 
     @trainable.setter
@@ -335,34 +221,20 @@ class Variable:
 
     @property
     def name(self):
-        """The name of the variable."""
         return self._name
 
     @property
     def path(self):
-        """The path of the variable within the Keras model or layer."""
         return self._path
 
     @property
     def overwrite_with_gradient(self):
-        """Whether this variable should be overwritten by the gradient.
-
-        This property is designed for a special case where we want to overwrite
-        the variable directly with its computed gradient. For example, in float8
-        training, new `scale` and `amax_history` are computed as gradients, and
-        we want to overwrite them directly instead of following the typical
-        procedure such as gradient descent with a learning rate, gradient
-        clipping and weight decaying.
-        """
         return self._overwrite_with_gradient
 
     @overwrite_with_gradient.setter
     def overwrite_with_gradient(self, value):
         if not isinstance(value, bool):
-            raise TypeError(
-                "`overwrite_with_gradient` must be a boolean. "
-                f"Received: {value}"
-            )
+            raise TypeError("`overwrite_with_gradient` must be a boolean.")
         self._overwrite_with_gradient = value
 
     @property
@@ -372,13 +244,8 @@ class Variable:
     @regularizer.setter
     def regularizer(self, value):
         from keras.src.regularizers import Regularizer
-
         if value is not None and not isinstance(value, Regularizer):
-            raise ValueError(
-                "Invalid value for attribute `regularizer`. Expected an "
-                "instance of `keras.regularizers.Regularizer`, or `None`. "
-                f"Received: regularizer={value}"
-            )
+            raise ValueError("Invalid regularizer")
         self._regularizer = value
 
     @property
@@ -388,173 +255,92 @@ class Variable:
     @constraint.setter
     def constraint(self, value):
         from keras.src.constraints import Constraint
-
         if value is not None and not isinstance(value, Constraint):
-            raise ValueError(
-                "Invalid value for attribute `constraint`. Expected an "
-                "instance of `keras.constraints.Constraint`, or `None`. "
-                f"Received: constraint={value}"
-            )
+            raise ValueError("Invalid constraint")
         self._constraint = value
 
     def __repr__(self):
-        value = None
-        if hasattr(self, "_value") and self._value is not None:
-            value = backend.core.convert_to_numpy(self._value)
-        value_str = f", value={value}" if value is not None else ""
+        val_for_repr = None
+        try:
+            if hasattr(self, '_shape') and self._shape is not None and \
+               hasattr(self, '_dtype') and self._dtype is not None:
+                if self._value is not None:
+                    val_for_repr = backend.core.convert_to_numpy(self._value)
+        except:
+            pass
+        path_str = self._path if hasattr(self, '_path') else self._name if hasattr(self, '_name') else 'Unknown'
+        shape_str = self._shape if hasattr(self, '_shape') and self._shape is not None else 'Unknown'
+        dtype_str = self._dtype if hasattr(self, '_dtype') and self._dtype is not None else 'Unknown'
+        value_str = f", value={val_for_repr}" if val_for_repr is not None else ""
         return (
-            f"<Variable path={self.path}, shape={self.shape}, "
-            f"dtype={self.dtype}{value_str}>"
+            f"<Variable path={path_str}, shape={shape_str}, "
+            f"dtype={dtype_str}{value_str}>"
         )
 
     def _initialize(self, value):
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement _initialize.")
 
     def _initialize_with_initializer(self, initializer):
+        # print(f"[KERAS_VAR_DEBUG] KerasVariable._initialize_with_initializer for '{self.path}' using initializer: {type(initializer)}")
         value = self._convert_to_tensor(
-            initializer(self._shape, dtype=self._dtype)
+            initializer(self.shape, dtype=self.dtype)
         )
         self._initialize(value)
 
     def _convert_to_tensor(self, value, dtype=None):
-        raise NotImplementedError
+        raise NotImplementedError("Subclasses must implement _convert_to_tensor.")
 
-    def __getitem__(self, idx):
-        return self.value.__getitem__(idx)
+    def _direct_assign(self, value):
+        raise NotImplementedError("Subclasses must implement _direct_assign.")
 
+    def __getitem__(self, idx): return self.value[idx]
     def __int__(self):
-        if self.ndim > 0:
-            raise TypeError(
-                "Only scalar arrays can be converted to Python scalars. "
-                f"Got: shape={self.shape}"
-            )
+        if self.ndim > 0: raise TypeError("Only scalar arrays can be converted.")
         return int(self.value)
-
     def __float__(self):
-        if self.ndim > 0:
-            raise TypeError(
-                "Only scalar arrays can be converted to Python scalars. "
-                f"Got: shape={self.shape}"
-            )
+        if self.ndim > 0: raise TypeError("Only scalar arrays can be converted.")
         return float(self.value)
-
-    def __array__(self, dtype=None):
-        # We can't directly use self.value.__array__ here because of scalar.
-        # Numpy require this method to return as array like object. In the case
-        # of scalar, it will fail the type checking from numpy. We need to
-        # return a 0d array via numpy.
-        return np.asarray(self.value.__array__(dtype))
-
-    def __bool__(self):
-        raise TypeError("A Keras Variable cannot be used as a boolean.")
-
-    def __neg__(self):
-        return self.value.__neg__()
-
-    def __pos__(self):
-        return self.value
-
-    def __abs__(self):
-        return self.value.__abs__()
-
-    def __invert__(self):
-        return self.value.__invert__()
-
-    def __eq__(self, other):
-        return backend.numpy.equal(self.value, other)
-
-    def __ne__(self, other):
-        return backend.numpy.not_equal(self.value, other)
-
-    def __lt__(self, other):
-        return backend.numpy.less(self.value, other)
-
-    def __le__(self, other):
-        return backend.numpy.less_equal(self.value, other)
-
-    def __gt__(self, other):
-        return backend.numpy.greater(self.value, other)
-
-    def __ge__(self, other):
-        return backend.numpy.greater_equal(self.value, other)
-
-    def __add__(self, other):
-        return backend.numpy.add(self.value, other)
-
-    def __radd__(self, other):
-        return backend.numpy.add(other, self.value)
-
-    def __sub__(self, other):
-        return backend.numpy.subtract(self.value, other)
-
-    def __rsub__(self, other):
-        return backend.numpy.subtract(other, self.value)
-
-    def __mul__(self, other):
-        return backend.numpy.multiply(self.value, other)
-
-    def __rmul__(self, other):
-        return backend.numpy.multiply(other, self.value)
-
-    def __truediv__(self, other):
-        return backend.numpy.true_divide(self.value, other)
-
-    def __rtruediv__(self, other):
-        return backend.numpy.true_divide(other, self.value)
-
-    def __floordiv__(self, other):
-        return backend.numpy.floor_divide(self.value, other)
-
-    def __rfloordiv__(self, other):
-        return backend.numpy.floor_divide(other, self.value)
-
-    def __mod__(self, other):
-        return backend.numpy.mod(self.value, other)
-
-    def __rmod__(self, other):
-        return backend.numpy.mod(other, self.value)
-
-    def __pow__(self, other):
-        return backend.numpy.power(self.value, other)
-
-    def __rpow__(self, other):
-        return backend.numpy.power(other, self.value)
-
-    def __matmul__(self, other):
-        return backend.numpy.matmul(self.value, other)
-
-    def __rmatmul__(self, other):
-        return backend.numpy.matmul(other, self.value)
-
-    def __and__(self, other):
-        return backend.numpy.logical_and(self.value, other)
-
-    def __rand__(self, other):
-        return backend.numpy.logical_and(other, self.value)
-
-    def __or__(self, other):
-        return backend.numpy.logical_or(self.value, other)
-
-    def __ror__(self, other):
-        return backend.numpy.logical_or(other, self.value)
-
-    def __xor__(self, other):
-        return backend.numpy.logical_xor(self.value, other)
-
-    def __rxor__(self, other):
-        return backend.numpy.logical_xor(other, self.value)
-
-    def __round__(self, ndigits=None):
-        decimals = ndigits or 0
-        return backend.numpy.round(self.value, decimals=decimals)
-
+    def __array__(self, dtype=None): return np.asarray(self.value.__array__(dtype))
+    def __bool__(self): raise TypeError("A Keras Variable cannot be used as a boolean.")
+    def __neg__(self): return backend.numpy.negative(self.value)
+    def __pos__(self): return self.value
+    def __abs__(self): return backend.numpy.absolute(self.value)
+    def __invert__(self): return backend.numpy.invert(self.value) # type: ignore
+    def __eq__(self, other): return backend.numpy.equal(self.value, other)
+    def __ne__(self, other): return backend.numpy.not_equal(self.value, other)
+    def __lt__(self, other): return backend.numpy.less(self.value, other)
+    def __le__(self, other): return backend.numpy.less_equal(self.value, other)
+    def __gt__(self, other): return backend.numpy.greater(self.value, other)
+    def __ge__(self, other): return backend.numpy.greater_equal(self.value, other)
+    def __add__(self, other): return backend.numpy.add(self.value, other)
+    def __radd__(self, other): return backend.numpy.add(other, self.value)
+    def __sub__(self, other): return backend.numpy.subtract(self.value, other)
+    def __rsub__(self, other): return backend.numpy.subtract(other, self.value)
+    def __mul__(self, other): return backend.numpy.multiply(self.value, other)
+    def __rmul__(self, other): return backend.numpy.multiply(other, self.value)
+    def __truediv__(self, other): return backend.numpy.true_divide(self.value, other)
+    def __rtruediv__(self, other): return backend.numpy.true_divide(other, self.value)
+    def __floordiv__(self, other): return backend.numpy.floor_divide(self.value, other)
+    def __rfloordiv__(self, other): return backend.numpy.floor_divide(other, self.value)
+    def __mod__(self, other): return backend.numpy.mod(self.value, other)
+    def __rmod__(self, other): return backend.numpy.mod(other, self.value)
+    def __pow__(self, other): return backend.numpy.power(self.value, other)
+    def __rpow__(self, other): return backend.numpy.power(other, self.value)
+    def __matmul__(self, other): return backend.numpy.matmul(self.value, other)
+    def __rmatmul__(self, other): return backend.numpy.matmul(other, self.value)
+    def __and__(self, other): return backend.numpy.logical_and(self.value, other)
+    def __rand__(self, other): return backend.numpy.logical_and(other, self.value)
+    def __or__(self, other): return backend.numpy.logical_or(self.value, other)
+    def __ror__(self, other): return backend.numpy.logical_or(other, self.value)
+    def __xor__(self, other): return backend.numpy.logical_xor(self.value, other)
+    def __rxor__(self, other): return backend.numpy.logical_xor(other, self.value)
+    def __round__(self, ndigits=None): return backend.numpy.round(self.value, decimals=(ndigits or 0))
 
 def register_uninitialized_variable(variable):
     uninitialized_variables = global_state.get_global_attribute(
         "uninitialized_variables", [], set_to_default=True
     )
     uninitialized_variables.append(variable)
-
 
 def initialize_all_variables():
     collection = global_state.get_global_attribute("uninitialized_variables")
@@ -563,120 +349,106 @@ def initialize_all_variables():
             v._deferred_initialize()
     global_state.set_global_attribute("uninitialized_variables", [])
 
-
 @keras_export(
     ["keras.utils.standardize_dtype", "keras.backend.standardize_dtype"]
 )
 def standardize_dtype(dtype):
     if dtype is None:
         return config.floatx()
-    dtype = dtypes.PYTHON_DTYPES_MAP.get(dtype, dtype)
-    if hasattr(dtype, "name"):
-        dtype = dtype.name
-    elif hasattr(dtype, "__name__"):
-        dtype = dtype.__name__
-    elif hasattr(dtype, "__str__") and (
-        "torch" in str(dtype) or "jax.numpy" in str(dtype)
+    dtype_str = dtypes.PYTHON_DTYPES_MAP.get(dtype, dtype)
+    if hasattr(dtype_str, "name"):
+        dtype_str = dtype_str.name
+    elif hasattr(dtype_str, "__name__"):
+        dtype_str = dtype_str.__name__
+    elif hasattr(dtype_str, "__str__") and (
+        "torch" in str(dtype_str) or "jax.numpy" in str(dtype_str) or "jaxlib" in str(dtype_str)
     ):
-        dtype = str(dtype).split(".")[-1]
-
-    if dtype not in dtypes.ALLOWED_DTYPES:
-        raise ValueError(f"Invalid dtype: {dtype}")
-    return dtype
-
+        dtype_str = str(dtype_str).split(".")[-1]
+    dtype_str = str(dtype_str).lower()
+    if dtype_str not in dtypes.ALLOWED_DTYPES:
+        for allowed_dtype in dtypes.ALLOWED_DTYPES:
+            if allowed_dtype in dtype_str:
+                dtype_str = allowed_dtype
+                break
+        else:
+            raise ValueError(f"Invalid dtype: {dtype} (standardized to {dtype_str})")
+    return dtype_str
 
 def standardize_shape(shape):
     if not isinstance(shape, tuple):
         if shape is None:
-            raise ValueError("Undefined shapes are not supported.")
+             raise ValueError("Shape cannot be None for standardize_shape.")
         if not hasattr(shape, "__iter__"):
             raise ValueError(f"Cannot convert '{shape}' to a shape.")
         if config.backend() == "tensorflow":
-            if isinstance(shape, tf.TensorShape):
-                # `tf.TensorShape` may contain `Dimension` objects.
-                # We need to convert the items in it to either int or `None`
+            if tf is not None and isinstance(shape, tf.TensorShape):
                 shape = shape.as_list()
         shape = tuple(shape)
 
-    if config.backend() == "torch":
-        # `shape` might be `torch.Size`. We need to convert the items in it to
-        # either int or `None`
-        shape = tuple(map(lambda x: int(x) if x is not None else None, shape))
-
     for e in shape:
-        if e is None:
+        if e is None: # Allowed for symbolic KerasTensor shapes, InputLayer will pass (None, dim)
             continue
         if config.backend() == "jax" and "_DimExpr" in str(type(e)):
-            # JAX2TF tracing uses JAX-native dimension expressions
             continue
         if not is_int_dtype(type(e)):
             raise ValueError(
-                f"Cannot convert '{shape}' to a shape. "
-                f"Found invalid entry '{e}' of type '{type(e)}'. "
+                f"Cannot convert '{shape}' to a shape. Found invalid entry '{e}' of type '{type(e)}'. "
             )
         if e < 0:
-            raise ValueError(
-                f"Cannot convert '{shape}' to a shape. "
-                "Negative dimensions are not allowed."
-            )
+            raise ValueError("Negative dimensions are not allowed in shapes.")
     return shape
 
-
 def shape_equal(a_shape, b_shape):
-    """Return whether a_shape == b_shape (allows None entries)."""
     if len(a_shape) != len(b_shape):
         return False
     for e1, e2 in zip(a_shape, b_shape):
+        # For variable shapes, None should not appear due to _validate_shape.
+        # If comparing symbolic shapes, None might mean "any size".
+        # For variable assignment, shapes must be concrete and equal.
         if e1 is not None and e2 is not None and e1 != e2:
+            return False
+        if (e1 is None and e2 is not None) or (e1 is not None and e2 is None): # Mismatch if one is None and other isn't
             return False
     return True
 
-
 @keras_export("keras.backend.is_float_dtype")
 def is_float_dtype(dtype):
-    dtype = standardize_dtype(dtype)
-    return dtype.startswith("float") or dtype.startswith("bfloat")
-
+    s_dtype = standardize_dtype(dtype)
+    return s_dtype.startswith("float") or s_dtype.startswith("bfloat")
 
 @keras_export("keras.backend.is_int_dtype")
 def is_int_dtype(dtype):
-    dtype = standardize_dtype(dtype)
-    return dtype.startswith("int") or dtype.startswith("uint")
-
+    if isinstance(dtype, type):
+        if issubclass(dtype, (int, np.integer)): # type: ignore
+            return True
+    elif isinstance(dtype, (int, np.integer)):
+         return True
+    s_dtype = standardize_dtype(dtype)
+    return s_dtype.startswith("int") or s_dtype.startswith("uint")
 
 def get_autocast_scope():
     return global_state.get_global_attribute("autocast_scope")
 
-
 class AutocastScope:
-    """Context manager that enables the autocasting of float variables.
-
-    Under this context manager, float `Variables`s will be cast to `dtype`
-    (note that `dtype` must also be float).
-    """
-
     def __init__(self, dtype):
         if dtype is not None:
-            dtype = standardize_dtype(dtype)
-            if not is_float_dtype(dtype):
-                raise ValueError(
-                    "`AutocastScope` can only be used with "
-                    "a floating-point target dtype, such as 'float16'. "
-                    f"Received: dtype={dtype}"
-                )
-        self.dtype = dtype
+            s_dtype = standardize_dtype(dtype)
+            if not is_float_dtype(s_dtype):
+                raise ValueError("`AutocastScope` can only be used with a floating-point target dtype.")
+            self.dtype = s_dtype
+        else:
+            self.dtype = None
         self.original_scope = None
-
     def maybe_cast(self, value):
-        from keras.src import backend
-
-        if self.dtype is not None and is_float_dtype(value.dtype):
-            return backend.cast(value, dtype=self.dtype)
+        from keras.src import backend as K
+        if self.dtype is not None and hasattr(value, 'dtype') and is_float_dtype(value.dtype):
+            return K.cast(value, dtype=self.dtype)
         return value
-
     def __enter__(self):
         self.original_scope = get_autocast_scope()
         global_state.set_global_attribute("autocast_scope", self)
-
     def __exit__(self, *args, **kwargs):
         global_state.set_global_attribute("autocast_scope", self.original_scope)
+
+KerasVariable = Variable
+```

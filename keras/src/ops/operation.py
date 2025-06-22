@@ -120,9 +120,11 @@ class Operation:
         """
         instance = super(Operation, cls).__new__(cls)
         if backend.backend() == "jax" and is_nnx_enabled():
-            from flax import nnx
-
-            vars(instance)["_object__state"] = nnx.object.ObjectState()
+            # Only initialize _object__state if it hasn't been already,
+            # e.g., by flax.nnx.Object.__new__ if 'cls' is also an nnx.Module.
+            if not hasattr(instance, "_object__state"):
+                from flax import nnx
+                vars(instance)["_object__state"] = nnx.object.ObjectState()
         # Generate a config to be returned by default by `get_config()`.
         arg_names = inspect.getfullargspec(cls.__init__).args
         kwargs.update(dict(zip(arg_names[1 : len(args) + 1], args)))

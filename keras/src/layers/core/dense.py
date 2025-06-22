@@ -148,9 +148,25 @@ class Dense(Layer):
         return self._kernel
 
     def call(self, inputs, training=None):
-        x = ops.matmul(inputs, self.kernel)
+        print(f"[NNX_DEBUG] Dense.call for '{self.name}': inputs type {type(inputs)}, shape {inputs.shape if hasattr(inputs, 'shape') else 'N/A'}")
+
+        # Access kernel
+        kernel_val = self.kernel # This accesses the property
+        print(f"[NNX_DEBUG] Dense.call for '{self.name}': self.kernel (type {type(kernel_val)}, shape {kernel_val.shape if hasattr(kernel_val, 'shape') else 'N/A'}, id {id(kernel_val)}) accessed via property.")
+        # If self.kernel is an NnxVariable, .value would be the JAX array.
+        # However, the Dense.kernel property already returns the JAX array (or result of LoRA computation)
+
+        x = ops.matmul(inputs, kernel_val) # kernel_val is already the JAX array
+
         if self.bias is not None:
-            x = ops.add(x, self.bias)
+            bias_val = self.bias # This accesses the NnxVariable attribute directly
+            print(f"[NNX_DEBUG] Dense.call for '{self.name}': self.bias (type {type(bias_val)}, id {id(bias_val)})")
+            # In NNX context, bias_val would be an NnxVariable. Its .value is used in ops.add
+            # ops.add should handle NnxVariable by using its .value or __jax_array__
+            x = ops.add(x, bias_val)
+        else:
+            print(f"[NNX_DEBUG] Dense.call for '{self.name}': no bias used.")
+
         if self.activation is not None:
             x = self.activation(x)
         return x

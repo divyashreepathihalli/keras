@@ -138,7 +138,16 @@ class Functional(Function, Model):
         if trainable is not None:
             self.trainable = trainable
 
-        self._layers = self.layers
+        self._layers = self.layers # This is self._layers = list(self._operations that are Layers)
+
+        # Removing the _nnx_internal_op_i loop to see if NNX naturally
+        # picks up self._layers as the child structure, given the grads output.
+        # if backend.backend() == "jax" and backend.config.is_nnx_enabled():
+        #     for i, operation in enumerate(self._operations):
+        #         if isinstance(operation, Layer):
+        #             attr_name = f"_nnx_internal_op_{i}"
+        #             setattr(self, attr_name, operation)
+
         self.build(None)
         # We will convert directly (to the correct dtype per input).
         self._convert_input_args = False

@@ -50,6 +50,10 @@ from keras.src.utils import python_utils
 from keras.src.utils import summary_utils
 from keras.src.utils import traceback_utils
 from keras.src.utils import tracking
+from keras.src.backend.config import is_nnx_enabled
+
+if is_nnx_enabled():
+    from flax import nnx
 
 if backend.backend() == "tensorflow":
     from keras.src.backend.tensorflow.layer import TFLayer as BackendLayer
@@ -1530,25 +1534,51 @@ class Layer(BackendLayer, Operation, KerasSaveable):
         return self.__repr__()
 
     def __setattr__(self, name, value):
-        # Track Variables, Layers, Metrics, SeedGenerators.
-        name, value = self._setattr_hook(name, value)
-        if name != "_tracker":
+        original_value_for_nnx = value
+
+        # Keras's own tracking logic
+        name_hooked, value_hooked = self._setattr_hook(name, value)
+
+        # The return value of self._tracker.track() is what's used for assignment
+        # in the original code. Keras's trackable lists are populated as a side effect.
+        if name_hooked != "_tracker":
             if not hasattr(self, "_tracker"):
                 self._initialize_tracker()
-            value = self._tracker.track(value)
+            # self._tracker.track populates Keras's internal lists (e.g., self._layers).
+            # It's assumed to return the value it was passed, or a wrapper if that's its design.
+            tracked_keras_value = self._tracker.track(value_hooked)
+        else:
+            # If setting the _tracker attribute itself.
+            tracked_keras_value = value_hooked
 
-        # NNX-specific bypass for `_called` and `built` attributes
-        if (
-            backend.backend() == "jax"
-            and is_nnx_enabled()
-            and (name == "_called" or name == "built")
-        ):
-            object.__setattr__(self, name, value)
+
+        if backend.backend() == "jax" and is_nnx_enabled():
+            # Handle special Keras attributes like _called or built.
+            # These should use the value after Keras tracking.
+            if name_hooked == "_called" or name_hooked == "built":
+                object.__setattr__(self, name_hooked, tracked_keras_value)
+                return
+
+            # For other attributes, decide what to pass to super().__setattr__ (nnx.Module.__setattr__).
+            # If the original value was an nnx.Module (e.g., a Keras Layer/sublayer)
+            # or a Keras Variable, it's crucial that NNX sees this original object
+            # for its state registration.
+            if isinstance(original_value_for_nnx, (Layer, nnx.Module)):
+                # Pass the original Layer/nnx.Module to nnx.Module.__setattr__
+                super().__setattr__(name_hooked, original_value_for_nnx)
+            elif isinstance(original_value_for_nnx, backend.Variable):
+                # Pass the original Keras Variable.
+                # nnx.Module.__setattr__ is expected to handle nnx.Variable/Param types correctly.
+                # How Keras Variable maps to an NNX variable type is handled by backend specifics.
+                super().__setattr__(name_hooked, original_value_for_nnx)
+            else:
+                # For other types of attributes, use the value that resulted from Keras tracking.
+                super().__setattr__(name_hooked, tracked_keras_value)
             return
 
-        super().__setattr__(
-            name, value
-        )  # Default path, including for NnxLayer -> nnx.Module
+        # Default path for non-NNX backend or if the NNX logic didn't return.
+        # This uses the tracked_keras_value, consistent with original Keras behavior.
+        super().__setattr__(name_hooked, tracked_keras_value)
 
     def __delattr__(self, name):
         obj = getattr(self, name)

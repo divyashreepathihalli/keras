@@ -118,6 +118,8 @@ class Sequential(Model):
             )
 
         self._layers.append(layer)
+        if global_state.get_global_attribute("nnx_enabled", False):
+            setattr(self, f"_nnx_layer_{len(self._layers) - 1}", layer)
         if rebuild:
             self._maybe_rebuild()
         else:
@@ -134,6 +136,8 @@ class Sequential(Model):
         Returns:
             layer: layer instance.
         """
+        if global_state.get_global_attribute("nnx_enabled", False) and self._layers:
+            delattr(self, f"_nnx_layer_{len(self._layers) - 1}")
         layer = self._layers.pop()
         self.built = False
         self._functional = None
@@ -187,6 +191,12 @@ class Sequential(Model):
                 InputLayer(batch_shape=input_shape, dtype=dtype)
             ] + self._layers
 
+        if global_state.get_global_attribute("nnx_enabled", False):
+            # In NNX mode, we don't build a functional model.
+            # We just execute layers in order in `call`.
+            self.built = True
+            return
+
         # Build functional model
         inputs = self._layers[0].output
         x = inputs
@@ -216,6 +226,18 @@ class Sequential(Model):
         self._functional = Functional(inputs=inputs, outputs=outputs)
 
     def call(self, inputs, training=None, mask=None, **kwargs):
+        if global_state.get_global_attribute("nnx_enabled", False):
+            if not self.built:
+                # The input shape might be nested, e.g. a dict.
+                input_shape = tree.map_structure(
+                    lambda x: backend.standardize_shape(x.shape), inputs
+                )
+                self.build(input_shape=input_shape)
+            x = inputs
+            for layer in self.layers:
+                x = layer(x, training=training)
+            return x
+
         if self._functional:
             return self._functional.call(
                 inputs, training=training, mask=mask, **kwargs
@@ -230,7 +252,7 @@ class Sequential(Model):
             # the next layer.
             layer_kwargs = {
                 k: kwargs[k]
-                # only inject if this layer’s signature actually has that arg
+                # only inject if this layer's signature actually has that arg
                 for k in getattr(layer, "_call_has_context_arg", {})
                 if k in kwargs
             }

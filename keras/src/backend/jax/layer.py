@@ -6,6 +6,15 @@ if is_nnx_enabled():
     class NnxLayer(nnx.Module):
         pass
 
+    # For type checking
+    class JaxLayer:
+        pass
 
-class JaxLayer:
-    pass
+else:
+
+    class JaxLayer:
+        pass
+
+    # For type checking
+    class NnxLayer:
+        pass

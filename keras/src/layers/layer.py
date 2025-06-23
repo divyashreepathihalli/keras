@@ -1530,25 +1530,22 @@ class Layer(BackendLayer, Operation, KerasSaveable):
         return self.__repr__()
 
     def __setattr__(self, name, value):
+        from keras.src import backend
+        from keras.src.backend.config import is_nnx_enabled
+
+        if backend.backend() == "jax" and is_nnx_enabled():
+            # With NNX enabled, we do not use the Keras tracker, and instead
+            # rely on the `__setattr__` of `nnx.Module`.
+            super().__setattr__(name, value)
+            return
+
         # Track Variables, Layers, Metrics, SeedGenerators.
         name, value = self._setattr_hook(name, value)
         if name != "_tracker":
             if not hasattr(self, "_tracker"):
                 self._initialize_tracker()
             value = self._tracker.track(value)
-
-        # NNX-specific bypass for `_called` and `built` attributes
-        if (
-            backend.backend() == "jax"
-            and is_nnx_enabled()
-            and (name == "_called" or name == "built")
-        ):
-            object.__setattr__(self, name, value)
-            return
-
-        super().__setattr__(
-            name, value
-        )  # Default path, including for NnxLayer -> nnx.Module
+        super().__setattr__(name, value)
 
     def __delattr__(self, name):
         obj = getattr(self, name)
@@ -1802,7 +1799,7 @@ def is_backend_tensor_or_symbolic(x, allow_none=False):
 
 class CallSpec:
     def __init__(self, signature, call_context_args, args, kwargs):
-        # Strip out user-supplied call-context args that this layer’s `call()`
+        # Strip out user-supplied call-context args that this layer's `call()`
         # does not accept (otherwise `signature.bind` would raise).
         # This includes built-in args like `training`, and user-defined args.
         call_args = {

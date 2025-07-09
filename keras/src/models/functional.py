@@ -177,9 +177,9 @@ class Functional(Function, Model):
             masks = [None] * len(inputs)
         else:
             masks = tree.flatten(mask)
-            for x, mask in zip(inputs, masks):
-                if mask is not None:
-                    backend.set_keras_mask(x, mask)
+            for x, m in zip(inputs, masks):
+                if m is not None:
+                    backend.set_keras_mask(x, m)
         outputs = self._run_through_graph(
             inputs,
             operation_fn=lambda op: operation_fn(
@@ -187,6 +187,56 @@ class Functional(Function, Model):
             ),
         )
         return unpack_singleton(outputs)
+
+    def _run_through_graph(self, inputs, operation_fn):
+        """Runs the graph of operations.
+
+        Args:
+            inputs: Tensor or list of tensors.
+            operation_fn: Function to apply to each operation.
+        """
+        flat_inputs = tree.flatten(self.inputs)
+        # Initialize a dict mapping KerasTensors to computed tensors.
+        tensor_dict = {}
+        for kt, t in zip(flat_inputs, inputs):
+            tensor_dict[id(kt)] = t
+
+        # Create a mapping from layer name to actual layer instance
+        layer_map = {layer.name: layer for layer in self._layers}
+
+        # Iterate over the operations, eager-executing them in topological order.
+        nodes_by_depth = self._nodes_by_depth
+        depth_keys = list(nodes_by_depth.keys())
+        depth_keys.sort(reverse=True)
+
+        for depth in depth_keys:
+            nodes = nodes_by_depth[depth]
+            for node in nodes:
+                if not node.operation or node.is_input:
+                    # Input tensors already exist or node has no operation.
+                    continue
+
+                operation = node.operation
+
+                # Check if all inputs for the current operation are available
+                if any(id(tensor) not in tensor_dict for tensor in node.input_tensors):
+                    continue
+
+                args, kwargs = node.arguments.fill_in(tensor_dict)
+
+                # Use the actual layer instance if NNX is enabled
+                current_op = operation
+                if backend.backend() == "jax" and backend.config.is_nnx_enabled():
+                    if isinstance(operation, Layer):
+                        current_op = layer_map.get(operation.name, operation)
+
+                outputs = operation_fn(current_op)(*args, **kwargs)
+                outputs = tree.flatten(outputs)
+
+                # Update tensor_dict with the outputs of the current operation
+                for kt, t in zip(node.outputs, outputs):
+                    tensor_dict[id(kt)] = t
+        return tree.map_structure(lambda x: tensor_dict[id(x)], self.outputs)
 
     def compute_output_spec(self, inputs, training=None, mask=None):
         # From Function
@@ -242,13 +292,13 @@ class Functional(Function, Model):
 
     def _convert_inputs_to_tensors(self, flat_inputs):
         converted = []
-        for x, input in zip(flat_inputs, self._inputs):
+        for x, input_tensor in zip(flat_inputs, self._inputs):
             if x is None:  # TODO: check if optional
                 converted.append(x)
             else:
                 converted.append(
                     ops.convert_to_tensor(
-                        x, dtype=input.dtype, sparse=input.sparse
+                        x, dtype=input_tensor.dtype, sparse=input_tensor.sparse
                     )
                 )
         return converted
@@ -351,10 +401,10 @@ class Functional(Function, Model):
             return self._manual_input_spec
 
         def shape_with_no_batch_size(x):
-            x = list(x)
-            if x:
-                x[0] = None
-            return tuple(x)
+            x_shape = list(x.shape)
+            if x_shape:
+                x_shape[0] = None
+            return tuple(x_shape)
 
         def make_spec_for_tensor(x, name=None):
             optional = False
@@ -362,7 +412,7 @@ class Functional(Function, Model):
                 if x._keras_history[0].optional:
                     optional = True
             return InputSpec(
-                shape=shape_with_no_batch_size(x.shape),
+                shape=shape_with_no_batch_size(x),
                 allow_last_axis_squeeze=True,
                 name=x._keras_history[0].name if name is None else name,
                 optional=optional,
@@ -671,7 +721,7 @@ def serialize_node(node, own_nodes=()):
         if isinstance(x, backend.KerasTensor):
             operation, node_index, tensor_index = x._keras_history
             irrelevant_node_count = 0
-            for i, node in enumerate(operation._inbound_nodes[:node_index]):
+            for i, node_obj in enumerate(operation._inbound_nodes[:node_index]):
                 node_key = make_node_key(operation, i)
                 if node_key not in own_nodes:
                     irrelevant_node_count += 1
@@ -740,20 +790,19 @@ def deserialize_node(node_data, created_layers):
             history = x._pre_serialization_keras_history
             if history is None:
                 return x
-            layer = created_layers.get(history[0], None)
+            layer_name, node_index, tensor_index = history
+            layer = created_layers.get(layer_name, None)
             if layer is None:
-                raise ValueError(f"Unknown layer: {history[0]}")
-            inbound_node_index = history[1]
-            inbound_tensor_index = history[2]
-            if len(layer._inbound_nodes) <= inbound_node_index:
+                raise ValueError(f"Unknown layer: {layer_name}")
+            if len(layer._inbound_nodes) <= node_index:
                 raise IndexError(
                     "Layer node index out of bounds.\n"
                     f"inbound_layer = {layer}\n"
                     f"inbound_layer._inbound_nodes = {layer._inbound_nodes}\n"
-                    f"inbound_node_index = {inbound_node_index}"
+                    f"inbound_node_index = {node_index}"
                 )
-            inbound_node = layer._inbound_nodes[inbound_node_index]
-            return inbound_node.output_tensors[inbound_tensor_index]
+            inbound_node = layer._inbound_nodes[node_index]
+            return inbound_node.output_tensors[tensor_index]
         return x
 
     args = tree.map_structure(convert_revived_tensor, args)

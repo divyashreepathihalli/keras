@@ -1765,6 +1765,7 @@ class LayerTest(testing.TestCase):
         inputs = layers.Input(shape=(None,))
         x = layers.Embedding(input_dim=10, output_dim=10)(inputs)
         x = layers.Dense(10)(x)
+        x = layers.BatchNormalization()(x) # Add batchnorm
         model = models.Model(inputs=inputs, outputs=x)
         path = os.path.join(self.get_temp_dir(), "quantized_model.keras")
         model.quantize(mode="int8")

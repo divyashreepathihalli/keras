@@ -1379,11 +1379,10 @@ class Layer(BackendLayer, Operation):
             store[f"{i}"] = v
 
     def _get_quantized_variables(self):
-        quantized_vars = []
-        for v in self._trainable_variables + self._non_trainable_variables:
-            if not backend.is_float_dtype(v.dtype):
-                quantized_vars.append(v)
-        return quantized_vars
+        quantized_vars = [
+            v for v in self._trainable_variables + self._non_trainable_variables
+            if not backend.is_float_dtype(v.dtype)
+        ]
 
     def load_own_variables(self, store):
         """Loads the state of the layer.

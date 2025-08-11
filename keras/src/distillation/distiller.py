@@ -162,9 +162,7 @@ class Distiller(Model):
 
         # Initialize loss tracking metrics
         self.student_loss_tracker = keras.metrics.Mean(name="student_loss")
-        self.distillation_loss_tracker = keras.metrics.Mean(
-            name="distillation_loss"
-        )
+        self.distillation_loss_tracker = keras.metrics.Mean(name="distillation_loss")
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
 
     def _validate_models(self, teacher, student):
@@ -522,7 +520,7 @@ class Distiller(Model):
         self.total_loss_tracker.reset_state()
 
     def get_config(self):
-        """Get configuration for serialization."""
+        """Get model configuration for serialization."""
         config = super().get_config()
         config.update(
             {

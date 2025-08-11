@@ -68,7 +68,7 @@ class TestDistiller(TestCase):
             student_loss_weight=0.5,
         )
 
-        # Compile distiller
+        # Compile distiller (without additional metrics to avoid JAX sharding issues)
         self.distiller.compile(
             optimizer="adam",
             loss="sparse_categorical_crossentropy",

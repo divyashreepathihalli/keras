@@ -162,7 +162,9 @@ class Distiller(Model):
 
         # Initialize loss tracking metrics
         self.student_loss_tracker = keras.metrics.Mean(name="student_loss")
-        self.distillation_loss_tracker = keras.metrics.Mean(name="distillation_loss")
+        self.distillation_loss_tracker = keras.metrics.Mean(
+            name="distillation_loss"
+        )
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
 
     def _validate_models(self, teacher, student):

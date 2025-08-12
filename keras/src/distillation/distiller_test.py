@@ -106,6 +106,9 @@ class TestDistiller(TestCase):
             "Model should be compiled",
         )
 
+        # Check that strategy received the default temperature
+        self.assertEqual(self.distiller.strategies[0].temperature, 2.0)
+
     def test_distiller_call(self):
         """Test Distiller call method (inference)."""
         # Call should return student outputs

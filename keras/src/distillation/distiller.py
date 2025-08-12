@@ -102,6 +102,10 @@ class Distiller(Model):
         name="distiller",
         **kwargs,
     ):
+        # Extract input_mapping and output_mapping before super().__init__
+        self.input_mapping = kwargs.pop("input_mapping", None)
+        self.output_mapping = kwargs.pop("output_mapping", None)
+
         super().__init__(name=name, **kwargs)
 
         # Validate inputs
@@ -166,6 +170,22 @@ class Distiller(Model):
             name="distillation_loss"
         )
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
+
+    def _apply_default_temperature(self):
+        """Apply default temperature to strategies that support it."""
+        from keras.src.distillation.strategies import LogitsDistillation
+
+        for strategy in self.strategies:
+            if isinstance(strategy, LogitsDistillation):
+                # Use the new method to set default temperature
+                strategy.set_default_temperature(self.temperature)
+            # Handle nested strategies in MultiOutputDistillation
+            elif hasattr(strategy, "output_strategies"):
+                for nested_strategy in strategy.output_strategies.values():
+                    if isinstance(nested_strategy, LogitsDistillation):
+                        nested_strategy.set_default_temperature(
+                            self.temperature
+                        )
 
     def _validate_models(self, teacher, student):
         """Validate that teacher and student models are compatible."""
@@ -521,8 +541,17 @@ class Distiller(Model):
         self.distillation_loss_tracker.reset_state()
         self.total_loss_tracker.reset_state()
 
+    @property
+    def metrics(self):
+        """Return list of metrics."""
+        return [
+            self.total_loss_tracker,
+            self.student_loss_tracker,
+            self.distillation_loss_tracker,
+        ]
+
     def get_config(self):
-        """Get model configuration for serialization."""
+        """Get configuration for serialization."""
         config = super().get_config()
         config.update(
             {

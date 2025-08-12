@@ -428,6 +428,22 @@ class TestDistiller(TestCase):
         prediction_sums = np.sum(predictions, axis=1)
         self.assertTrue(np.all(np.isfinite(prediction_sums)))
 
+    def test_get_student_model_method(self):
+        """Test the get_student_model() convenience method."""
+        distiller = Distiller(
+            teacher=self.teacher,
+            student=self.student,
+            strategies=[LogitsDistillation()],
+            alpha=0.5,
+        )
+
+        # Test that get_student_model returns the same as direct access
+        student_direct = distiller.student
+        student_method = distiller.get_student_model()
+
+        self.assertIs(student_direct, student_method)
+        self.assertEqual(student_method.name, self.student.name)
+
     def test_distiller_serialization_and_saving(self):
         """Test Distiller serialization, saving, and loading."""
 

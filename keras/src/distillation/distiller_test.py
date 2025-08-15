@@ -106,8 +106,12 @@ class TestDistiller(TestCase):
             "Model should be compiled",
         )
 
-        # Check that strategy received the default temperature
+        # Check that strategy has the correct temperature
         self.assertEqual(self.distiller.strategies[0].temperature, 2.0)
+
+        # Check that model is compiled
+        self.assertIsNotNone(self.distiller.optimizer)
+        self.assertIsNotNone(self.distiller.compiled_loss)
 
     def test_distiller_call(self):
         """Test Distiller call method (inference)."""
@@ -433,8 +437,10 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=[LogitsDistillation()],
-            alpha=0.5,
+            strategy=self.strategy,
+            student_loss_weight=0.5,
+            optimizer=keras.optimizers.Adam(),
+            student_loss="sparse_categorical_crossentropy",
         )
 
         # Test that get_student_model returns the same as direct access

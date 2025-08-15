@@ -90,31 +90,6 @@ class Distiller(Model):
         metrics=['accuracy']
     )
     ```
-
-    **Accessing and Saving the Trained Student Model:**
-
-    ```python
-    # After training
-    distiller.fit(x_train, y_train, epochs=10)
-
-    # Method 1: Direct access
-    trained_student = distiller.student
-
-    # Method 2: Using convenience method (recommended)
-    trained_student = distiller.get_student_model()
-
-    # Save the student model independently
-    trained_student.save('trained_student.keras')
-
-    # Use student model for inference
-    predictions = trained_student.predict(x_test)
-
-    # Further train the student model independently
-    trained_student.compile(
-        optimizer='adam', loss='sparse_categorical_crossentropy'
-    )
-    trained_student.fit(x_new, y_new, epochs=5)
-    ```
     """
 
     def __init__(
@@ -196,21 +171,10 @@ class Distiller(Model):
         )
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
 
-    def _apply_default_temperature(self):
-        """Apply default temperature to strategies that support it."""
-        from keras.src.distillation.strategies import LogitsDistillation
-
-        for strategy in self.strategies:
-            if isinstance(strategy, LogitsDistillation):
-                # Use the new method to set default temperature
-                strategy.set_default_temperature(self.temperature)
-            # Handle nested strategies in MultiOutputDistillation
-            elif hasattr(strategy, "output_strategies"):
-                for nested_strategy in strategy.output_strategies.values():
-                    if isinstance(nested_strategy, LogitsDistillation):
-                        nested_strategy.set_default_temperature(
-                            self.temperature
-                        )
+        # Compile the model with provided parameters
+        self.compile(
+            optimizer=optimizer, loss=student_loss, metrics=metrics or []
+        )
 
     def _validate_models(self, teacher, student):
         """Validate that teacher and student models are compatible."""

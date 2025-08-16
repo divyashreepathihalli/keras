@@ -127,13 +127,16 @@ class Distiller(Model):
                 f"got {student_loss_weight}"
             )
         self.student_loss_weight = student_loss_weight
-        
+
         # Convert string loss to function if needed
         if isinstance(student_loss, str):
             self._student_loss = keras.losses.get(student_loss)
         elif isinstance(student_loss, list):
             # Handle multi-output loss functions
-            self._student_loss = [keras.losses.get(loss) if isinstance(loss, str) else loss for loss in student_loss]
+            self._student_loss = [
+                keras.losses.get(loss) if isinstance(loss, str) else loss
+                for loss in student_loss
+            ]
         else:
             self._student_loss = student_loss
 
@@ -531,8 +534,6 @@ class Distiller(Model):
         self.total_loss_tracker.update_state(total_loss)
 
         return total_loss
-
-
 
     def reset_metrics(self):
         """Reset all metrics."""

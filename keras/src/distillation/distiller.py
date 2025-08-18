@@ -128,15 +128,35 @@ class Distiller(Model):
             )
         self.student_loss_weight = student_loss_weight
 
+        # Validate metrics parameter
+        if metrics is not None and not isinstance(metrics, (list, tuple)):
+            raise ValueError(
+                f"metrics must be a list or tuple, got {type(metrics)}"
+            )
+
         # Convert string loss to function if needed
         if isinstance(student_loss, str):
             self._student_loss = keras.losses.get(student_loss)
+            if self._student_loss is None:
+                raise ValueError(
+                    f"Unknown loss function: '{student_loss}'. "
+                    "Please provide a valid loss function name or instance."
+                )
         elif isinstance(student_loss, list):
             # Handle multi-output loss functions
-            self._student_loss = [
-                keras.losses.get(loss) if isinstance(loss, str) else loss
-                for loss in student_loss
-            ]
+            self._student_loss = []
+            for i, loss in enumerate(student_loss):
+                if isinstance(loss, str):
+                    loss_fn = keras.losses.get(loss)
+                    if loss_fn is None:
+                        raise ValueError(
+                            f"Unknown loss function at index {i}: '{loss}'. "
+                            "Please provide valid loss function names or "
+                            "instances."
+                        )
+                    self._student_loss.append(loss_fn)
+                else:
+                    self._student_loss.append(loss)
         else:
             self._student_loss = student_loss
 
@@ -184,9 +204,7 @@ class Distiller(Model):
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
 
         # Compile the model with provided parameters
-        self.compile(
-            optimizer=optimizer, loss=student_loss, metrics=metrics or []
-        )
+        self.compile(optimizer=optimizer, loss=student_loss, metrics=metrics)
 
     def _validate_models(self, teacher, student):
         """Validate that teacher and student models are compatible."""

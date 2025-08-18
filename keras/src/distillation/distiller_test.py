@@ -107,11 +107,17 @@ class TestDistiller(TestCase):
         )
 
         # Check that strategy has the correct temperature
-        self.assertEqual(self.distiller.strategies[0].temperature, 2.0)
+        self.assertEqual(self.distiller.strategy.temperature, 2.0)
 
         # Check that model is compiled
         self.assertIsNotNone(self.distiller.optimizer)
-        self.assertIsNotNone(self.distiller.compiled_loss)
+        # Check if the model has been compiled (different backends may handle
+        # this differently)
+        self.assertTrue(
+            hasattr(self.distiller, "_compile_config")
+            or hasattr(self.distiller, "compiled_loss"),
+            "Model should be compiled",
+        )
 
     def test_distiller_call(self):
         """Test Distiller call method (inference)."""

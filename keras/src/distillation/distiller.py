@@ -571,7 +571,6 @@ class Distiller(Model):
 
     def get_config(self):
         """Get configuration for serialization."""
-        from keras.src.saving import serialization_lib
 
         config = super().get_config()
         config.update(

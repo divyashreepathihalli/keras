@@ -513,12 +513,12 @@ class TestDistiller(TestCase):
             student_loss="sparse_categorical_crossentropy",
         )
 
-        # Test that get_student_model returns the same as direct access
+        # Test that student_model property returns the same as direct access
         student_direct = distiller.student
-        student_method = distiller.get_student_model()
+        student_property = distiller.student_model
 
-        self.assertIs(student_direct, student_method)
-        self.assertEqual(student_method.name, self.student.name)
+        self.assertIs(student_direct, student_property)
+        self.assertEqual(student_property.name, self.student.name)
 
     def test_distiller_serialization_and_saving(self):
         """Test Distiller serialization, saving, and loading."""

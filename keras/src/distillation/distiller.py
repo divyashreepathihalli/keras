@@ -102,10 +102,6 @@ class Distiller(Model):
         name="distiller",
         **kwargs,
     ):
-        # Extract input_mapping and output_mapping before super().__init__
-        self.input_mapping = kwargs.pop("input_mapping", None)
-        self.output_mapping = kwargs.pop("output_mapping", None)
-
         super().__init__(name=name, **kwargs)
 
         # Validate inputs
@@ -134,31 +130,24 @@ class Distiller(Model):
                 f"metrics must be a list or tuple, got {type(metrics)}"
             )
 
-        # Convert string loss to function if needed
-        if isinstance(student_loss, str):
-            self._student_loss = keras.losses.get(student_loss)
-            if self._student_loss is None:
+            # Convert string loss to function using tree.map_structure
+
+        def convert_loss_to_function(loss):
+            if isinstance(loss, str):
+                loss_fn = keras.losses.get(loss)
+                if loss_fn is None:
+                    raise ValueError(
+                        f"Unknown loss function: '{loss}'. "
+                        "Please provide a valid loss function name or instance."
+                    )
+                return loss_fn
+            elif loss is None:
                 raise ValueError(
-                    f"Unknown loss function: '{student_loss}'. "
-                    "Please provide a valid loss function name or instance."
+                    "Student loss function cannot be None. "
+                    "Please provide a valid 'student_loss' parameter."
                 )
-        elif isinstance(student_loss, list):
-            # Handle multi-output loss functions
-            self._student_loss = []
-            for i, loss in enumerate(student_loss):
-                if isinstance(loss, str):
-                    loss_fn = keras.losses.get(loss)
-                    if loss_fn is None:
-                        raise ValueError(
-                            f"Unknown loss function at index {i}: '{loss}'. "
-                            "Please provide valid loss function names or "
-                            "instances."
-                        )
-                    self._student_loss.append(loss_fn)
-                else:
-                    self._student_loss.append(loss)
-        else:
-            self._student_loss = student_loss
+            else:
+                return loss
 
         # Handle distillation_loss configuration
         if distillation_loss is None:

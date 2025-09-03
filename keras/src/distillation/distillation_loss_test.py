@@ -71,6 +71,145 @@ class TestEndToEndDistillation(TestCase):
                 keras.layers.Dense(
                     16, activation="relu", name="teacher_dense_2"
                 ),
+                keras.layers.Dense(
+                    10, activation="softmax", name="teacher_output"
+                ),
+            ]
+        )
+
+        # Create student model (smaller)
+        student = keras.Sequential(
+            [
+                keras.layers.Dense(
+                    32, activation="relu", name="student_dense_1"
+                ),
+                keras.layers.Dense(
+                    16, activation="relu", name="student_dense_2"
+                ),
+                keras.layers.Dense(
+                    10, activation="softmax", name="student_output"
+                ),
+            ]
+        )
+
+        # Create distiller
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            strategy=LogitsDistillation(temperature=3.0),
+            student_loss_weight=0.5,
+            optimizer=keras.optimizers.Adam(learning_rate=0.01),
+            student_loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
+        )
+
+        # Create test data
+        x = np.random.random((32, 20)).astype(np.float32)
+        y = np.random.randint(0, 10, (32,)).astype(np.int32)
+
+        # Test training
+        history = distiller.fit(x, y, epochs=2, verbose=0)
+
+        # Verify training completed
+        self.assertIn("total_loss", history.history)
+        self.assertIn("student_loss", history.history)
+        self.assertIn("distillation_loss", history.history)
+
+        # Verify loss values are reasonable
+        final_loss = history.history["total_loss"][-1]
+        self.assertTrue(np.isfinite(final_loss))
+        self.assertGreater(final_loss, 0.0)
+
+        # Test prediction
+        predictions = distiller.predict(x[:5], verbose=0)
+        self.assertEqual(predictions.shape, (5, 10))
+
+        # Test student model access
+        student_model = distiller.student_model
+        self.assertIsInstance(student_model, keras.Model)
+
+    def test_feature_distillation_end_to_end(self):
+        """Test end-to-end feature distillation with real models."""
+        # Create teacher model
+        teacher = keras.Sequential(
+            [
+                keras.layers.Dense(
+                    32, activation="relu", name="teacher_dense_1"
+                ),
+                keras.layers.Dense(
+                    16, activation="relu", name="teacher_dense_2"
+                ),
+                keras.layers.Dense(10, name="teacher_output"),
+            ]
+        )
+
+        # Create student model with compatible intermediate layer sizes
+        student = keras.Sequential(
+            [
+                keras.layers.Dense(
+                    32, activation="relu", name="student_dense_1"
+                ),
+                keras.layers.Dense(
+                    16, activation="relu", name="student_dense_2"
+                ),
+                keras.layers.Dense(10, name="student_output"),
+            ]
+        )
+
+        # Build models first
+        dummy_input = np.random.random((2, 20)).astype(np.float32)
+        teacher(dummy_input)
+        student(dummy_input)
+
+        # Create distiller with feature distillation
+        distiller = Distiller(
+            teacher=teacher,
+            student=student,
+            strategy=FeatureDistillation(
+                loss="mse",
+                teacher_layer_name="teacher_dense_1",
+                student_layer_name="student_dense_1",
+            ),
+            student_loss_weight=0.5,
+            optimizer=keras.optimizers.Adam(learning_rate=0.01),
+            student_loss="sparse_categorical_crossentropy",
+        )
+
+        # Create test data
+        x = np.random.random((32, 20)).astype(np.float32)
+        y = np.random.randint(0, 10, (32,)).astype(np.int32)
+
+        # Test training
+        history = distiller.fit(x, y, epochs=2, verbose=0)
+
+        # Verify training completed
+        self.assertIn("total_loss", history.history)
+        self.assertIn("student_loss", history.history)
+        self.assertIn("distillation_loss", history.history)
+
+        # Verify feature extraction worked
+        self.assertIsNotNone(distiller._teacher_feature_extractor)
+        self.assertIsNotNone(distiller._student_feature_extractor)
+
+        # Test that feature extractors have correct outputs
+        self.assertEqual(
+            len(distiller._teacher_feature_extractor.outputs), 2
+        )  # final + dense_1
+        self.assertEqual(
+            len(distiller._student_feature_extractor.outputs), 2
+        )  # final + dense_1
+
+    def test_multi_strategy_distillation_end_to_end(self):
+        """Test end-to-end distillation with multiple strategies."""
+        # Create models
+        teacher = keras.Sequential(
+            [
+                keras.layers.Dense(
+                    32, activation="relu", name="teacher_dense_1"
+                ),
+                keras.layers.Dense(
+                    16, activation="relu", name="teacher_dense_2"
+                ),
                 keras.layers.Dense(10, name="teacher_output"),
             ]
         )

@@ -401,44 +401,19 @@ class LogitsDistillation(FeatureDistillation):
     computing the loss between teacher and student predictions. It's the most
     common approach for knowledge distillation.
 
-    How Logits Distillation Works:
-
-    1. Temperature Scaling: The teacher's logits are divided by a `temperature`
-       parameter (typically 3-5) before applying softmax. This creates "softer"
-       probability distributions that reveal relationships between classes.
-
-    2. Loss Computation: The loss is computed between the temperature-scaled
-       teacher logits and student logits using the specified loss function.
-
-    When to Use Logits Distillation:
-
-    - General Classification: Works well for most classification tasks
-    - Model Compression: Effective for reducing model size while maintaining
-      accuracy
-    - Transfer Learning: Good for leveraging knowledge from pre-trained models
-    - Ensemble Distillation: Can combine multiple teacher models
-
-    Temperature Guidelines:
-
-    - Low Temperature (1-2): Sharp distributions, similar to hard labels
-    - Medium Temperature (3-5): Balanced softness, most commonly used
-    - High Temperature (6-10): Very soft distributions, reveals subtle
-      relationships
-
     Args:
         temperature: Temperature for softmax scaling. Higher values produce
             softer probability distributions that are easier for the student to
             learn. Typical values range from 3-5. Defaults to 3.0.
-        loss: Loss function(s) to use for distillation. Can be:
+        loss: Loss function to use for distillation. Can be:
             - String identifier (e.g., 'kl_divergence',
               'categorical_crossentropy')
             - Keras loss instance
             - List/tuple of losses for multi-output models
             - Dict of losses for named outputs
-            The structure must match the model's output structure.
             Defaults to 'kl_divergence'.
 
-    Example:
+    Examples:
 
     ```python
     # Basic logits distillation with KL divergence
@@ -456,43 +431,11 @@ class LogitsDistillation(FeatureDistillation):
         loss=keras.losses.CategoricalCrossentropy(from_logits=True)
     )
 
-    # For multi-output models with list structure
+    # For multi-output models
     strategy = LogitsDistillation(
         temperature=3.0,
         loss=["kl_divergence", "categorical_crossentropy"]
     )
-
-    # For multi-output models with dict structure
-    strategy = LogitsDistillation(
-        temperature=3.0,
-        loss={
-            "classification": "kl_divergence",
-            "regression": "mse"
-        }
-    )
-
-    # Custom loss by subclassing
-    class CustomLogitsDistillation(LogitsDistillation):
-        def compute_loss(self, teacher_outputs, student_outputs, **kwargs):
-            # Apply temperature scaling using tree.map_structure
-            teacher_scaled = tree.map_structure(
-                lambda x: x / self.temperature, teacher_outputs
-            )
-            student_scaled = tree.map_structure(
-                lambda x: x / self.temperature, student_outputs
-            )
-
-            # Custom loss computation
-            return tree.map_structure(
-                lambda t, s: keras.ops.mean(
-                    keras.losses.kl_divergence(
-                        keras.ops.softmax(t, axis=-1),
-                        keras.ops.softmax(s, axis=-1)
-                    )
-                ),
-                teacher_scaled,
-                student_scaled
-            )
     ```
     """
 

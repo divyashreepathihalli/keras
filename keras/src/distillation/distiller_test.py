@@ -263,7 +263,7 @@ class TestDistiller(TestCase):
         self.assertEqual(distiller.strategy_weights, [0.7, 0.3])
 
         # Test training
-        x = np.random.random((10, 8)).astype(np.float32)
+        x = np.random.random((10, 5)).astype(np.float32)
         y = np.random.randint(0, 10, (10,))
         history = distiller.fit(x, y, epochs=1, verbose=0)
 

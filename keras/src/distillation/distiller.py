@@ -192,9 +192,6 @@ class Distiller(Model):
         )
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
 
-        # Initialize the model - compile with provided parameters
-        self.compile(optimizer=optimizer, loss=student_loss, metrics=metrics)
-
     def _validate_models(self, teacher, student):
         """Validate that teacher and student models are compatible."""
         if not isinstance(teacher, keras.Model):
@@ -549,31 +546,6 @@ class Distiller(Model):
         self.distillation_loss_tracker.reset_state()
         self.total_loss_tracker.reset_state()
 
-    @property
-    def metrics(self):
-        """Return list of metrics."""
-        # Get parent metrics (from compile)
-        parent_metrics = []
-        if hasattr(super(), "metrics"):
-            parent_metrics = [
-                m
-                for m in super().metrics
-                if m
-                not in [
-                    self.total_loss_tracker,
-                    self.student_loss_tracker,
-                    self.distillation_loss_tracker,
-                ]
-            ]
-
-        # Add our custom loss trackers first
-        distillation_metrics = [
-            self.total_loss_tracker,
-            self.student_loss_tracker,
-            self.distillation_loss_tracker,
-        ]
-        return distillation_metrics + parent_metrics
-
     def get_config(self):
         """Get configuration for serialization."""
         config = super().get_config()
@@ -591,18 +563,6 @@ class Distiller(Model):
                 ],
                 "distillation_loss_weights": self.distillation_loss_weights,
                 "student_loss_weight": self.student_loss_weight,
-                # Save current state, not initial parameters
-                "optimizer": serialization_lib.serialize_keras_object(
-                    self.optimizer
-                )
-                if hasattr(self, "optimizer") and self.optimizer
-                else None,
-                "student_loss": serialization_lib.serialize_keras_object(
-                    getattr(self, "_student_loss_for_serialization", None)
-                ),
-                # Note: metrics are not easily serializable due to
-                # CompileMetrics complexity, so we skip them in serialization
-                "metrics": None,
             }
         )
         return config

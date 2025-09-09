@@ -107,8 +107,12 @@ class TestEndToEndDistillation(TestCase):
             student=student,
             strategies=LogitsDistillation(temperature=3.0),
             student_loss_weight=0.5,
-            optimizer=keras.optimizers.Adam(learning_rate=0.01),
-            student_loss="sparse_categorical_crossentropy",
+        )
+
+        # Compile distiller
+        distiller.compile(
+            optimizer="adam",
+            loss="sparse_categorical_crossentropy",
             metrics=["accuracy"],
         )
 
@@ -130,7 +134,7 @@ class TestEndToEndDistillation(TestCase):
         self.assertEqual(predictions.shape, (5, 10))
 
         # Test student model access
-        student_model = distiller.student_model
+        student_model = distiller.student
         self.assertIsInstance(student_model, keras.Model)
 
     def test_feature_distillation_end_to_end(self):
@@ -176,8 +180,13 @@ class TestEndToEndDistillation(TestCase):
                 student_layer_name="student_dense_1",
             ),
             student_loss_weight=0.5,
-            optimizer=keras.optimizers.Adam(learning_rate=0.01),
-            student_loss="sparse_categorical_crossentropy",
+        )
+
+        # Compile distiller
+        distiller.compile(
+            optimizer="adam",
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
         )
 
         # Create test data

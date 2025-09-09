@@ -254,8 +254,13 @@ class TestDistiller(TestCase):
             strategies=strategies,
             strategy_weights=strategy_weights,
             student_loss_weight=0.5,
+        )
+
+        # Compile distiller
+        distiller.compile(
             optimizer="adam",
-            student_loss="sparse_categorical_crossentropy",
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
         )
 
         # Test that strategies are stored correctly
@@ -285,8 +290,6 @@ class TestDistiller(TestCase):
             student=self.student,
             strategies=strategies,
             student_loss_weight=0.5,
-            optimizer="adam",
-            student_loss="sparse_categorical_crossentropy",
         )
 
         self.assertEqual(len(distiller.strategies), 2)
@@ -299,8 +302,6 @@ class TestDistiller(TestCase):
                 strategies=strategies,
                 strategy_weights=[1.0],  # Wrong length
                 student_loss_weight=0.5,
-                optimizer="adam",
-                student_loss="sparse_categorical_crossentropy",
             )
 
     def test_student_loss_weighting(self):

@@ -57,6 +57,22 @@ class JaxVariable(KerasVariable):
     def __jax_array__(self):
         return self.value
 
+    @property
+    def value(self):
+        if self._value is None:
+            if self._initializer is None:
+                raise ValueError(
+                    "Cannot initialize a variable with no initializer"
+                )
+            self._initialize(self._initializer(self.shape, dtype=self.dtype))
+
+        if in_stateless_scope():
+            scope = get_stateless_scope()
+            stateless_value = scope.get_current_value(self)
+            if stateless_value is not None:
+                return self._maybe_autocast(stateless_value)
+        return self._maybe_autocast(self._value)
+
 
 Variable = JaxVariable
 if config.is_nnx_enabled():

@@ -29,6 +29,30 @@ def _convert_loss_to_function(loss_item):
         return loss_item
 
 
+def _convert_loss_to_function(loss_item):
+    """Convert a loss string identifier to a loss function.
+
+    Args:
+        loss_item: Either a string identifier, a loss function instance,
+            or None.
+
+    Returns:
+        A loss function instance, or None.
+
+    Raises:
+        ValueError: If the loss string identifier is unknown.
+    """
+    if loss_item is None:
+        return None
+    elif isinstance(loss_item, str):
+        loss_fn = keras.losses.get(loss_item)
+        if loss_fn is None:
+            raise ValueError(f"Unknown loss function: '{loss_item}'.")
+        return loss_fn
+    else:
+        return loss_item
+
+
 @keras_export("keras.distillation.DistillationLoss")
 class DistillationLoss:
     """Base class for distillation loss computation.
@@ -95,7 +119,6 @@ class DistillationLoss:
         Raises:
             ValueError: If models are not compatible with this strategy.
         """
-        # can be overridden by subclasses
         pass
 
 
@@ -426,7 +449,9 @@ class LogitsDistillation(FeatureDistillation):
               'categorical_crossentropy')
             - Keras loss instance
             - Nested structure of losses matching the model output structure
-            Defaults to 'kl_divergence'.
+            - None to skip distillation for that output (useful for multi-output
+              models where you only want to distill some outputs)
+            At least one loss must be non-None. Defaults to 'kl_divergence'.
 
     Examples:
 
@@ -451,6 +476,12 @@ class LogitsDistillation(FeatureDistillation):
         temperature=3.0,
         loss=["kl_divergence", "categorical_crossentropy"]
     )
+
+    # For multi-output models, only distill some outputs
+    strategy = LogitsDistillation(
+        temperature=3.0,
+        loss=["kl_divergence", None]  # Skip second output
+    )
     ```
     """
 
@@ -460,28 +491,18 @@ class LogitsDistillation(FeatureDistillation):
         loss="kl_divergence",
     ):
         self.temperature = temperature
+        self.loss = tree.map_structure(_convert_loss_to_function, loss)
 
-        # Convert loss structure to functions using tree.map_structure
-        def convert_loss_to_function(loss_item):
-            if isinstance(loss_item, str):
-                loss_fn = keras.losses.get(loss_item)
-                if loss_fn is None:
-                    raise ValueError(f"Unknown loss function: {loss_item}")
-                return loss_fn
-            else:
-                return loss_item
+        flat_losses = tree.flatten(self.loss)
+        if all(l is None for l in flat_losses):
+            raise ValueError("At least one loss must be non-None.")
 
-        self.loss = tree.map_structure(convert_loss_to_function, loss)
-
-        # Validate temperature
         if not isinstance(self.temperature, (int, float)):
             raise ValueError(
                 f"temperature must be a number, got {type(self.temperature)}"
             )
         if self.temperature <= 0.0:
-            raise ValueError(
-                "temperature must be > 0. Set a positive value (e.g., 1-10)."
-            )
+            raise ValueError("temperature must be positive.")
 
     def compute_loss(self, teacher_outputs, student_outputs, **kwargs):
         """Compute distillation loss using the configured loss function.
@@ -505,6 +526,9 @@ class LogitsDistillation(FeatureDistillation):
 
         # Apply loss function(s) to corresponding outputs
         def apply_loss(loss_fn, teacher_logits, student_logits):
+            if loss_fn is None:
+                return 0.0
+
             # Special handling for KL divergence (needs probabilities)
             if (
                 hasattr(loss_fn, "__name__")

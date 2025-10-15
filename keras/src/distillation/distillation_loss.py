@@ -485,6 +485,7 @@ class LogitsDistillation(FeatureDistillation):
     ```
     """
 
+    @tracking.no_automatic_dependency_tracking
     def __init__(
         self,
         temperature=3.0,

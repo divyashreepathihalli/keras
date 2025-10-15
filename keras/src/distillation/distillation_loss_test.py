@@ -74,11 +74,12 @@ class TestEndToEndDistillation(TestCase):
                 keras.layers.Dense(
                     10, activation="softmax", name="teacher_output"
                 ),
+                keras.layers.Dense(10, name="teacher_output"),
             ]
         )
 
-        # Create student model (smaller)
-        student = keras.Sequential(
+        # Create student model
+        self.student = keras.Sequential(
             [
                 keras.layers.Dense(
                     32, activation="relu", name="student_dense_1"
@@ -86,25 +87,22 @@ class TestEndToEndDistillation(TestCase):
                 keras.layers.Dense(
                     16, activation="relu", name="student_dense_2"
                 ),
-                keras.layers.Dense(
-                    10, activation="softmax", name="student_output"
-                ),
+                keras.layers.Dense(10, name="student_output"),
             ]
         )
 
-        # Create test data
-        x = np.random.random((32, 20)).astype(np.float32)
-        y = np.random.randint(0, 10, (32,)).astype(np.int32)
+        self.x = np.random.random((32, 20)).astype(np.float32)
+        self.y = np.random.randint(0, 10, (32,)).astype(np.int32)
 
-        # Build models to avoid JAX tracer issues
-        dummy_input = x[:2]
-        teacher(dummy_input)
-        student(dummy_input)
+        self.teacher(self.x[:2])
+        self.student(self.x[:2])
 
+    def test_logits_distillation_end_to_end(self):
+        """Test end-to-end logits distillation with real models."""
         # Create distiller
         distiller = Distiller(
-            teacher=teacher,
-            student=student,
+            teacher=self.teacher,
+            student=self.student,
             strategies=LogitsDistillation(temperature=3.0),
             student_loss_weight=0.5,
         )
@@ -117,7 +115,7 @@ class TestEndToEndDistillation(TestCase):
         )
 
         # Test training
-        history = distiller.fit(x, y, epochs=2, verbose=0)
+        history = distiller.fit(self.x, self.y, epochs=2, verbose=0)
 
         # Verify training completed
         self.assertIn("total_loss", history.history)
@@ -130,7 +128,7 @@ class TestEndToEndDistillation(TestCase):
         self.assertGreater(final_loss, 0.0)
 
         # Test prediction
-        predictions = distiller.predict(x[:5], verbose=0)
+        predictions = distiller.predict(self.x[:5], verbose=0)
         self.assertEqual(predictions.shape, (5, 10))
 
         # Test student model access
@@ -139,41 +137,10 @@ class TestEndToEndDistillation(TestCase):
 
     def test_feature_distillation_end_to_end(self):
         """Test end-to-end feature distillation with real models."""
-        # Create teacher model
-        teacher = keras.Sequential(
-            [
-                keras.layers.Dense(
-                    32, activation="relu", name="teacher_dense_1"
-                ),
-                keras.layers.Dense(
-                    16, activation="relu", name="teacher_dense_2"
-                ),
-                keras.layers.Dense(10, name="teacher_output"),
-            ]
-        )
-
-        # Create student model with compatible intermediate layer sizes
-        student = keras.Sequential(
-            [
-                keras.layers.Dense(
-                    32, activation="relu", name="student_dense_1"
-                ),
-                keras.layers.Dense(
-                    16, activation="relu", name="student_dense_2"
-                ),
-                keras.layers.Dense(10, name="student_output"),
-            ]
-        )
-
-        # Build models first
-        dummy_input = np.random.random((2, 20)).astype(np.float32)
-        teacher(dummy_input)
-        student(dummy_input)
-
         # Create distiller with feature distillation
         distiller = Distiller(
-            teacher=teacher,
-            student=student,
+            teacher=self.teacher,
+            student=self.student,
             strategies=FeatureDistillation(
                 loss="mse",
                 teacher_layer_name="teacher_dense_1",
@@ -189,12 +156,8 @@ class TestEndToEndDistillation(TestCase):
             metrics=["accuracy"],
         )
 
-        # Create test data
-        x = np.random.random((32, 20)).astype(np.float32)
-        y = np.random.randint(0, 10, (32,)).astype(np.int32)
-
         # Test training
-        history = distiller.fit(x, y, epochs=2, verbose=0)
+        history = distiller.fit(self.x, self.y, epochs=2, verbose=0)
 
         # Verify training completed
         self.assertIn("total_loss", history.history)

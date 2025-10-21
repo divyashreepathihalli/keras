@@ -440,7 +440,7 @@ class LogitsDistillation(FeatureDistillation):
     computing the loss between teacher and student predictions. It's the most
     common approach for knowledge distillation.
 
-    Args:
+    Arguments:
         temperature: Temperature for softmax scaling. Higher values produce
             softer probability distributions that are easier for the student to
             learn. Typical values range from 3-5. Defaults to 3.0.
@@ -453,7 +453,7 @@ class LogitsDistillation(FeatureDistillation):
               models where you only want to distill some outputs)
             At least one loss must be non-None. Defaults to 'kl_divergence'.
 
-    Examples:
+    Examlpe(s):
 
     ```python
     # Basic logits distillation with KL divergence
@@ -508,7 +508,7 @@ class LogitsDistillation(FeatureDistillation):
     def compute_loss(self, teacher_outputs, student_outputs, **kwargs):
         """Compute distillation loss using the configured loss function.
 
-        Args:
+        Arguments:
             teacher_outputs: Logits from teacher model. Can be a single tensor,
                 list/tuple of tensors, or dict of tensors.
             student_outputs: Logits from student model. Can be a single tensor,
@@ -531,10 +531,7 @@ class LogitsDistillation(FeatureDistillation):
                 return 0.0
 
             # Special handling for KL divergence (needs probabilities)
-            if (
-                hasattr(loss_fn, "__name__")
-                and "kl" in loss_fn.__name__.lower()
-            ):
+            if isinstance(loss_fn, keras.losses.KLDivergence):
                 teacher_probs = keras.ops.softmax(teacher_logits, axis=-1)
                 student_probs = keras.ops.softmax(student_logits, axis=-1)
                 loss = keras.ops.mean(loss_fn(teacher_probs, student_probs))

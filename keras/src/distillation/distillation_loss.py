@@ -37,7 +37,7 @@ def _convert_loss_to_function(loss_item):
             or None.
 
     Returns:
-        A loss function instance, or None.
+        A loss function instance, or `None`.
 
     Raises:
         ValueError: If the loss string identifier is unknown.
@@ -449,9 +449,9 @@ class LogitsDistillation(FeatureDistillation):
               'categorical_crossentropy')
             - Keras loss instance
             - Nested structure of losses matching the model output structure
-            - None to skip distillation for that output (useful for multi-output
-              models where you only want to distill some outputs)
-            At least one loss must be non-None. Defaults to 'kl_divergence'.
+            - `None` to skip distillation for that output (useful for
+              multi-output models where you only want to distill some outputs)
+            At least one loss must be non-`None`. Defaults to 'kl_divergence'.
 
     Examlpe(s):
 

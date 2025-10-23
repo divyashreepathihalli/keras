@@ -106,8 +106,8 @@ class TestDistiller(TestCase):
             "Model should be compiled",
         )
 
-        # Check that strategy has the correct temperature
-        self.assertEqual(self.distiller.strategies[0].temperature, 2.0)
+        # Check that distillation loss has the correct temperature
+        self.assertEqual(self.distiller.distillation_losses[0].temperature, 2.0)
 
         # Check that model is compiled
         self.assertIsNotNone(self.distiller.optimizer)
@@ -238,21 +238,21 @@ class TestDistiller(TestCase):
                 student_loss_weight=0.5,
             )
 
-    def test_multi_strategy_functionality(self):
-        """Test multi-strategy functionality."""
-        # Create multiple strategies
-        strategies = [
+    def test_multi_distillation_loss_functionality(self):
+        """Test multi distillation loss functionality."""
+        # Create multiple distillation losses
+        distillation_losses = [
             LogitsDistillation(temperature=3.0),
             LogitsDistillation(temperature=2.0),
         ]
-        strategy_weights = [0.7, 0.3]
+        distillation_loss_weights = [0.7, 0.3]
 
-        # Create distiller with multiple strategies
+        # Create distiller with multiple distillation losses
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=strategies,
-            strategy_weights=strategy_weights,
+            distillation_losses=distillation_losses,
+            distillation_loss_weights=distillation_loss_weights,
             student_loss_weight=0.5,
         )
 
@@ -263,9 +263,9 @@ class TestDistiller(TestCase):
             metrics=["accuracy"],
         )
 
-        # Test that strategies are stored correctly
-        self.assertEqual(len(distiller.strategies), 2)
-        self.assertEqual(distiller.strategy_weights, [0.7, 0.3])
+        # Test that distillation losses are stored correctly
+        self.assertEqual(len(distiller.distillation_losses), 2)
+        self.assertEqual(distiller.distillation_loss_weights, [0.7, 0.3])
 
         # Test training
         x = np.random.random((10, 5)).astype(np.float32)
@@ -277,9 +277,9 @@ class TestDistiller(TestCase):
         self.assertIn("student_loss", history.history)
         self.assertIn("distillation_loss", history.history)
 
-    def test_multi_strategy_validation(self):
-        """Test multi-strategy validation."""
-        strategies = [
+    def test_multi_distillation_loss_validation(self):
+        """Test multi distillation loss validation."""
+        distillation_losses = [
             LogitsDistillation(temperature=3.0),
             LogitsDistillation(temperature=2.0),
         ]
@@ -288,19 +288,19 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=strategies,
+            distillation_losses=distillation_losses,
             student_loss_weight=0.5,
         )
 
-        self.assertEqual(len(distiller.strategies), 2)
+        self.assertEqual(len(distiller.distillation_losses), 2)
 
-        # Test invalid strategy weights length
+        # Test invalid distillation loss weights length
         with self.assertRaises(ValueError):
             Distiller(
                 teacher=self.teacher,
                 student=self.student,
-                strategies=strategies,
-                strategy_weights=[1.0],  # Wrong length
+                distillation_losses=distillation_losses,
+                distillation_loss_weights=[1.0],  # Wrong length
                 student_loss_weight=0.5,
             )
 

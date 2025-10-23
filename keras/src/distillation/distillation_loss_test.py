@@ -103,7 +103,7 @@ class TestEndToEndDistillation(TestCase):
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=LogitsDistillation(temperature=3.0),
+            distillation_losses=LogitsDistillation(temperature=3.0),
             student_loss_weight=0.5,
         )
 
@@ -141,7 +141,7 @@ class TestEndToEndDistillation(TestCase):
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=FeatureDistillation(
+            distillation_losses=FeatureDistillation(
                 loss="mse",
                 teacher_layer_name="teacher_dense_1",
                 student_layer_name="student_dense_1",

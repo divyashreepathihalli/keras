@@ -53,7 +53,7 @@ class DistillationLoss:
                 tensor or a list/tuple of tensors for multi-output models.
             student_outputs: Outputs from the student model. Can be a single
                 tensor or a list/tuple of tensors for multi-output models.
-            **kwargs: Additional arguments for custom strategies.
+            **kwargs: Additional arguments for custom distillation losses.
         Returns:
             Distillation loss tensor.
         """
@@ -77,14 +77,15 @@ class DistillationLoss:
             teacher: The teacher model.
             student: The student model.
         Raises:
-            ValueError: If models are not compatible with this strategy.
+            ValueError: If models are not compatible with this distillation
+                loss.
         """
         pass
 
 
 @keras_export("keras.distillation.FeatureDistillation")
 class FeatureDistillation(DistillationLoss):
-    """Feature distillation strategy using intermediate layer representations.
+    """Feature distillation loss using intermediate layer representations.
 
     Feature distillation transfers knowledge from intermediate layers of the
     teacher model to corresponding layers of the student model. This approach
@@ -108,34 +109,34 @@ class FeatureDistillation(DistillationLoss):
 
     ```python
     # Basic feature distillation from final outputs
-    strategy = FeatureDistillation(loss="mse")
+    distillation_loss = FeatureDistillation(loss="mse")
 
     # Distill from specific intermediate layers
-    strategy = FeatureDistillation(
+    distillation_loss = FeatureDistillation(
         loss="mse",
         teacher_layer_name="dense_1",
         student_layer_name="dense_1"
     )
 
     # Use cosine similarity for different feature sizes
-    strategy = FeatureDistillation(
+    distillation_loss = FeatureDistillation(
         loss="cosine_similarity",
         teacher_layer_name="conv2d_2",
         student_layer_name="conv2d_1"
     )
 
     # With custom loss instance
-    strategy = FeatureDistillation(
+    distillation_loss = FeatureDistillation(
         loss=keras.losses.MeanAbsoluteError()
     )
 
     # For multi-output models
-    strategy = FeatureDistillation(
+    distillation_loss = FeatureDistillation(
         loss=["mse", "cosine_similarity"]
     )
 
     # For multi-output models, only distill some outputs
-    strategy = FeatureDistillation(
+    distillation_loss = FeatureDistillation(
         loss=["mse", None, "cosine_similarity"]  # Skip middle output
     )
     ```
@@ -255,11 +256,11 @@ class FeatureDistillation(DistillationLoss):
 
 @keras_export("keras.distillation.LogitsDistillation")
 class LogitsDistillation(DistillationLoss):
-    """Distillation strategy that transfers knowledge from final model outputs.
+    """Distillation loss that transfers knowledge from final model outputs.
 
-    This strategy applies temperature scaling to the teacher's logits before
-    computing the loss between teacher and student predictions. It's the most
-    common approach for knowledge distillation.
+    This distillation loss applies temperature scaling to the teacher's logits
+    before computing the loss between teacher and student predictions. It's the
+    most common approach for knowledge distillation.
 
     Arguments:
         temperature: Temperature for softmax scaling. Higher values produce
@@ -278,28 +279,28 @@ class LogitsDistillation(DistillationLoss):
 
     ```python
     # Basic logits distillation with KL divergence
-    strategy = LogitsDistillation(temperature=3.0)
+    distillation_loss = LogitsDistillation(temperature=3.0)
 
     # With categorical crossentropy loss
-    strategy = LogitsDistillation(
+    distillation_loss = LogitsDistillation(
         temperature=4.0,
         loss="categorical_crossentropy"
     )
 
     # With custom loss instance
-    strategy = LogitsDistillation(
+    distillation_loss = LogitsDistillation(
         temperature=4.0,
         loss=keras.losses.CategoricalCrossentropy(from_logits=True)
     )
 
     # For multi-output models
-    strategy = LogitsDistillation(
+    distillation_loss = LogitsDistillation(
         temperature=3.0,
         loss=["kl_divergence", "categorical_crossentropy"]
     )
 
     # For multi-output models, only distill some outputs
-    strategy = LogitsDistillation(
+    distillation_loss = LogitsDistillation(
         temperature=3.0,
         loss=["kl_divergence", None]  # Skip second output
     )

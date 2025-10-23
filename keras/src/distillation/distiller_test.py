@@ -65,7 +65,7 @@ class TestDistiller(TestCase):
         self.distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=0.5,
         )
 
@@ -87,13 +87,15 @@ class TestDistiller(TestCase):
         # Check student_loss_weight
         self.assertEqual(self.distiller.student_loss_weight, 0.5)
 
-        # Check strategies (should be a list with one strategy)
-        self.assertIsInstance(self.distiller.strategies, list)
-        self.assertEqual(len(self.distiller.strategies), 1)
-        self.assertIsInstance(self.distiller.strategies[0], LogitsDistillation)
+        # Check distillation_loss (should be a list with one strategy)
+        self.assertIsInstance(self.distiller.distillation_loss, list)
+        self.assertEqual(len(self.distiller.distillation_loss), 1)
+        self.assertIsInstance(
+            self.distiller.distillation_loss[0], LogitsDistillation
+        )
 
         # Check that strategy has the correct temperature
-        self.assertEqual(self.distiller.strategies[0].temperature, 2.0)
+        self.assertEqual(self.distiller.distillation_loss[0].temperature, 2.0)
 
         # Check that model is compiled
         self.assertIsNotNone(self.distiller.optimizer)
@@ -134,7 +136,7 @@ class TestDistiller(TestCase):
         Distiller(
             teacher=new_teacher,
             student=self.student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=0.5,
         )
 
@@ -148,14 +150,14 @@ class TestDistiller(TestCase):
             Distiller(
                 teacher="not_a_model",
                 student=self.student,
-                strategies=self.strategy,
+                distillation_loss=self.strategy,
             )
 
         with self.assertRaises(ValueError):
             Distiller(
                 teacher=self.teacher,
                 student="not_a_model",
-                strategies=self.strategy,
+                distillation_loss=self.strategy,
             )
 
     def test_multi_strategy_functionality(self):
@@ -171,8 +173,8 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=strategies,
-            strategy_weights=strategy_weights,
+            distillation_loss=strategies,
+            distillation_loss_weights=strategy_weights,
             student_loss_weight=0.5,
         )
 
@@ -184,8 +186,8 @@ class TestDistiller(TestCase):
         )
 
         # Test that strategies are stored correctly
-        self.assertEqual(len(distiller.strategies), 2)
-        self.assertEqual(distiller.strategy_weights, [0.7, 0.3])
+        self.assertEqual(len(distiller.distillation_loss), 2)
+        self.assertEqual(distiller.distillation_loss_weights, [0.7, 0.3])
 
         # Test training
         x = np.random.random((10, 5)).astype(np.float32)
@@ -208,19 +210,19 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=strategies,
+            distillation_loss=strategies,
             student_loss_weight=0.5,
         )
 
-        self.assertEqual(len(distiller.strategies), 2)
+        self.assertEqual(len(distiller.distillation_loss), 2)
 
         # Test invalid strategy weights length
         with self.assertRaises(ValueError):
             Distiller(
                 teacher=self.teacher,
                 student=self.student,
-                strategies=strategies,
-                strategy_weights=[1.0],  # Wrong length
+                distillation_loss=strategies,
+                distillation_loss_weights=[1.0],  # Wrong length
                 student_loss_weight=0.5,
             )
 
@@ -230,7 +232,7 @@ class TestDistiller(TestCase):
         distiller_0 = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=0.0,
         )
 
@@ -238,7 +240,7 @@ class TestDistiller(TestCase):
         distiller_1 = Distiller(
             teacher=self.teacher,
             student=self.student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=1.0,
         )
 
@@ -288,7 +290,7 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=teacher,
             student=student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=0.5,
         )
 
@@ -363,7 +365,7 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=teacher,
             student=student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=0.5,
         )
 
@@ -407,7 +409,7 @@ class TestDistiller(TestCase):
         distiller = Distiller(
             teacher=teacher,
             student=student,
-            strategies=self.strategy,
+            distillation_loss=self.strategy,
             student_loss_weight=0.5,
         )
 
@@ -458,7 +460,7 @@ class TestDistiller(TestCase):
         original_distiller = Distiller(
             teacher=teacher,
             student=student,
-            strategies=strategy,
+            distillation_loss=strategy,
             student_loss_weight=0.7,
         )
 
@@ -473,8 +475,8 @@ class TestDistiller(TestCase):
         required_keys = [
             "teacher",
             "student",
-            "strategies",
-            "strategy_weights",
+            "distillation_loss",
+            "distillation_loss_weights",
             "student_loss_weight",
         ]
         for key in required_keys:
@@ -490,11 +492,13 @@ class TestDistiller(TestCase):
         # Verify reconstruction
         self.assertEqual(reconstructed_distiller.student_loss_weight, 0.7)
         self.assertIsInstance(
-            reconstructed_distiller.strategies[0], LogitsDistillation
+            reconstructed_distiller.distillation_loss[0], LogitsDistillation
         )
 
         # Verify strategy parameters
-        self.assertEqual(reconstructed_distiller.strategies[0].temperature, 3.0)
+        self.assertEqual(
+            reconstructed_distiller.distillation_loss[0].temperature, 3.0
+        )
 
         # Test that reconstructed distiller can be used for inference
         reconstructed_output = reconstructed_distiller(x_test)

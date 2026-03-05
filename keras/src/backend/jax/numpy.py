@@ -144,8 +144,8 @@ def einsum(subscripts, *operands, **kwargs):
             except ImportError:
                 pass
             except Exception as e:
-                import logging
-                logging.warning(f"Tokamax einsum fallback for MoE: {e}")
+                import logging as _logging
+                _logging.warning(f"Tokamax einsum fallback for MoE: {e}")
 
     # When all operands are of int8, specifying `preferred_element_type` as
     # int32 to enable hardware-accelerated einsum

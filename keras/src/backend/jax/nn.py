@@ -1695,11 +1695,11 @@ def dot_product_attention(
                 implementation="mosaic",
             )
         except ImportError:
-            import logging
-            logging.info("Tokamax is enabled but cannot be imported. Falling back.")
+            import logging as _logging
+            _logging.info("Tokamax is enabled but cannot be imported. Falling back.")
         except Exception as e:
-            import logging
-            logging.warning(f"Tokamax dot_product_attention failed: {e}. Falling back.")
+            import logging as _logging
+            _logging.warning(f"Tokamax dot_product_attention failed: {e}. Falling back.")
 
     # Check platform
     platform = jax.devices()[0].platform

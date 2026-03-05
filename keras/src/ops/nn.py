@@ -3131,8 +3131,8 @@ def _layer_normalization(
         except ImportError:
             pass
         except Exception as e:
-            import logging
-            logging.warning(f"Tokamax layer_norm failed: {e}. Falling back.")
+            import logging as _logging
+            _logging.warning(f"Tokamax layer_norm failed: {e}. Falling back.")
 
     # Compute the axes along which to reduce the mean / variance
     input_shape = x.shape

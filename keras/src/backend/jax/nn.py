@@ -1681,6 +1681,26 @@ def dot_product_attention(
     if bias is not None:
         bias = convert_to_tensor(bias, dtype=compute_dtype)
 
+    if getattr(backend.config, "is_tokamax_enabled", lambda: False)():
+        try:
+            import tokamax
+            return tokamax.dot_product_attention(
+                query,
+                key,
+                value,
+                bias=bias,
+                mask=mask,
+                scale=scale,
+                is_causal=is_causal,
+                implementation="mosaic",
+            )
+        except ImportError:
+            import logging
+            logging.info("Tokamax is enabled but cannot be imported. Falling back.")
+        except Exception as e:
+            import logging
+            logging.warning(f"Tokamax dot_product_attention failed: {e}. Falling back.")
+
     # Check platform
     platform = jax.devices()[0].platform
     is_tpu = platform == "tpu"

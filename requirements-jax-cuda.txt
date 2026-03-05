@@ -11,4 +11,5 @@ torch
 jax[cuda12]==0.6.2
 flax
 
+tokamax @ git+https://github.com/openxla/tokamax.git
 -r requirements-common.txt

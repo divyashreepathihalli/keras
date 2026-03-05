@@ -3117,6 +3117,23 @@ def _layer_normalization(
     if beta is not None:
         beta = backend.convert_to_tensor(beta, x.dtype)
 
+    if getattr(backend.config, "is_tokamax_enabled", lambda: False)() and not rms_scaling and backend.backend() == "jax":
+        try:
+            import tokamax
+            # Fast path using Tokamax if available
+            return tokamax.layer_norm(
+                x,
+                scale=gamma,
+                offset=beta,
+                axis=axis,
+                epsilon=epsilon,
+            )
+        except ImportError:
+            pass
+        except Exception as e:
+            import logging
+            logging.warning(f"Tokamax layer_norm failed: {e}. Falling back.")
+
     # Compute the axes along which to reduce the mean / variance
     input_shape = x.shape
     ndims = len(input_shape)

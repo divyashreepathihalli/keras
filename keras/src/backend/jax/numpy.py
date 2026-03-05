@@ -133,6 +133,20 @@ def bincount(x, weights=None, minlength=0, sparse=False):
 
 def einsum(subscripts, *operands, **kwargs):
     operands = [convert_to_tensor(x) for x in operands]
+    
+    # Tokamax fast path for MoE
+    if getattr(config, "is_tokamax_enabled", lambda: False)():
+        subs_no_space = subscripts.replace(" ", "")
+        if subs_no_space == "bSe,eH->bSH" and len(operands) == 2:
+            try:
+                import tokamax
+                return tokamax.ragged_dot(operands[0], operands[1])
+            except ImportError:
+                pass
+            except Exception as e:
+                import logging
+                logging.warning(f"Tokamax einsum fallback for MoE: {e}")
+
     # When all operands are of int8, specifying `preferred_element_type` as
     # int32 to enable hardware-accelerated einsum
     dtypes = list(set(standardize_dtype(x.dtype) for x in operands))

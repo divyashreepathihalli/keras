@@ -11,4 +11,5 @@ torch
 jax[tpu]
 flax
 
+tokamax @ git+https://github.com/openxla/tokamax.git
 -r requirements-common.txt

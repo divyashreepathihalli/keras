@@ -233,6 +233,35 @@ def is_flash_attention_enabled():
     return global_state.get_global_attribute("flash_attention", default=None)
 
 
+@keras_export("keras.config.enable_tokamax")
+def enable_tokamax():
+    """Enable tokamax for accelerated hardware ops.
+    """
+    from keras.src.backend.common import global_state
+
+    global_state.set_global_attribute("use_tokamax", True)
+
+
+@keras_export("keras.config.disable_tokamax")
+def disable_tokamax():
+    """Disable tokamax.
+    """
+    from keras.src.backend.common import global_state
+
+    global_state.set_global_attribute("use_tokamax", False)
+
+
+@keras_export("keras.config.is_tokamax_enabled")
+def is_tokamax_enabled():
+    """Checks whether tokamax is globally enabled in Keras.
+    """
+    from keras.src.backend.common import global_state
+    
+    # Enabled by default only for the JAX backend
+    default_enabled = _BACKEND == "jax"
+    return global_state.get_global_attribute("use_tokamax", default=default_enabled)
+
+
 @keras_export("keras.config.is_nnx_enabled")
 def is_nnx_enabled():
     """Checks whether NNX specific features are enabled for the JAX backend.

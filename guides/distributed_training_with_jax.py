@@ -9,7 +9,7 @@ Accelerator: GPU
 
 """
 ## Introduction
-
+jhgufutcutc
 There are generally two ways to distribute computation across multiple devices:
 
 **Data parallelism**, where a single model gets replicated on multiple devices or

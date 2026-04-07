@@ -9,15 +9,6 @@ on:
     types:
       - completed
 
-# ── Setup required ──
-# 1. Create a bot account (e.g. keras-autofix-bot) and fork the repo under it
-# 2. Create a PAT for the bot with `repo` and `workflow` scopes
-# 3. Add repo secrets:
-#    - BOT_PAT: the bot's PAT
-#    - GEMINI_API: Gemini API key
-# 4. Add repo variable:
-#    - BOT_FORK_OWNER: the bot account name (e.g. "keras-autofix-bot")
-
 permissions: {}
 
 jobs:

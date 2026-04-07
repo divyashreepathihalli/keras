@@ -218,10 +218,22 @@ jobs:
       github.event.workflow_run.conclusion == 'failure' &&
       startsWith(github.event.workflow_run.head_branch, 'auto-fix-')
     steps:
-      - name: Checkout ${{ github.event.workflow_run.head_branch }}
+      - name: Checkout merge base
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Checkout auto-fix branch by SHA
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # Validate branch name contains only safe characters
+          if [[ ! "$HEAD_BRANCH" =~ ^auto-fix-[a-zA-Z0-9_.-]+$ ]]; then
+            echo "::error::Unexpected branch name: $HEAD_BRANCH"
+            exit 1
+          fi
+          # Fetch and checkout by immutable SHA, not by branch name
+          git fetch origin "$HEAD_SHA"
+          git checkout "$HEAD_SHA"
 
       - name: 'Set up Python'
         uses: actions/setup-python@v5

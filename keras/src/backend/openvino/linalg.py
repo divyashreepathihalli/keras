@@ -1796,8 +1796,12 @@ def matrix_power(a, n):
 
         return OpenVINOKerasTensor(result)
 
-    is_negative = n < 0
-    if is_negative:
+    if n < 0:
+        # Invert first and then exponentiate, like `np.linalg.matrix_power`
+        # and the other backends. Exponentiating first and inverting the
+        # result squares the condition number of the matrix being inverted,
+        # which costs significant precision in float32.
+        a_ov = ov_opset.inverse(a_ov, adjoint=False).output(0)
         n = abs(n)
 
     if n == 1:
@@ -1819,9 +1823,6 @@ def matrix_power(a, n):
                     curr_a_ov, curr_a_ov, False, False
                 ).output(0)
             n //= 2
-
-    if is_negative:
-        result_ov = ov_opset.inverse(result_ov, adjoint=False).output(0)
 
     return OpenVINOKerasTensor(result_ov)
 

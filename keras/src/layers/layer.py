@@ -1562,9 +1562,14 @@ class Layer(BackendLayer, Operation):
         # Otherwise, attempt to build the layer by calling it on symbolic input.
         if might_have_unbuilt_state(self):
             try:
-                backend.compute_output_spec(
-                    self.call, **call_spec.arguments_dict
-                )
+                from keras.src.utils import jax_utils  # avoid circular imports
+
+                if jax_utils.is_in_jax_tracing_scope():
+                    self.call(**call_spec.arguments_dict)
+                else:
+                    backend.compute_output_spec(
+                        self.call, **call_spec.arguments_dict
+                    )
             except Exception as e:
                 if call_spec.eager:
                     # Will let the actual eager call do state-building
